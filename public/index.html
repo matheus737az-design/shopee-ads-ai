@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Shopee Ads AI</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<style>
+  body { margin: 0; font-family: Inter, system-ui, sans-serif; }
+  .icon { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+"use strict";
+const { useState, useRef, useEffect, useCallback } = React;
+/* =========================================================================
+   ACESSO AO BACKEND — mesma origem, então usamos caminhos relativos (/api/...)
+   ========================================================================= */
+const API_BASE = "/api";
+async function apiFetch(path, options) {
+    const res = await fetch(`${API_BASE}${path}`, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Erro ${res.status} ao falar com o backend.`);
+    }
+    return res.json();
+}
+const api = {
+    health: () => apiFetch("/health"),
+    generate: (url, style) => apiFetch("/generate", { method: "POST", body: JSON.stringify({ url, style }) }),
+    regenerateText: (product, style) => apiFetch("/generate/text", { method: "POST", body: JSON.stringify({ product, style }) }),
+    listAds: () => apiFetch("/ads"),
+    saveAd: (ad) => apiFetch("/ads", { method: "POST", body: JSON.stringify(ad) }),
+    updateAd: (id, fields) => apiFetch(`/ads/${id}`, { method: "PATCH", body: JSON.stringify(fields) }),
+    platforms: () => apiFetch("/ads/publish/platforms"),
+    publish: (adId, platform) => apiFetch(`/ads/${adId}/publish`, { method: "POST", body: JSON.stringify({ platform }) }),
+    dashboard: () => apiFetch("/dashboard"),
+};
+function money(v) { return v == null ? null : v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
+const TEXT_STYLES = [
+    { key: "oferta", label: "Oferta", emoji: "🔥" },
+    { key: "beneficio", label: "Benefício", emoji: "💡" },
+    { key: "desejo", label: "Desejo", emoji: "😍" },
+    { key: "viral", label: "Viral", emoji: "⚡" },
+    { key: "profissional", label: "Profissional", emoji: "🛍️" },
+];
+const PLATFORM_EMOJI = { whatsapp: "💬", telegram: "✈️", facebook: "📘", instagram: "📸", tiktok: "🎵" };
+const EXAMPLES = [
+    { title: "Organizador de Gavetas 6 Divisórias", images: ["🗄️"], price: 39.9, originalPrice: 59.9 },
+    { title: "Mini Umidificador USB com LED", images: ["💧"], price: 27.5, originalPrice: 45.0 },
+    { title: "Fone Bluetooth TWS Prova D'água", images: ["🎧"], price: 59.9, originalPrice: 129.9 },
+];
+const ART_TEMPLATES = [
+    { key: "oferta", label: "Oferta" },
+    { key: "desconto", label: "Desconto" },
+    { key: "achadinho", label: "Achadinho" },
+    { key: "minimalista", label: "Minimalista" },
+];
+function truncate(s, n) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+function ArtSvg({ product, template }) {
+    var _a, _b;
+    const price = money(product.price);
+    const original = money(product.originalPrice);
+    const emoji = (_b = (_a = product.images) === null || _a === void 0 ? void 0 : _a[0]) !== null && _b !== void 0 ? _b : "🛍️";
+    const palettes = {
+        oferta: { bg: "#FF4B3E", accent: "#1A1A2E", chip: "#FFD23F" },
+        desconto: { bg: "#1A1A2E", accent: "#FF4B3E", chip: "#C6F135" },
+        achadinho: { bg: "#FFF3E8", accent: "#FF4B3E", chip: "#1A1A2E" },
+        minimalista: { bg: "#FFFFFF", accent: "#1A1A2E", chip: "#FF4B3E" },
+    };
+    const c = palettes[template] || palettes.oferta;
+    const dark = template === "achadinho" || template === "minimalista";
+    return (React.createElement("svg", { viewBox: "0 0 1080 1080", width: "100%", height: "100%", xmlns: "http://www.w3.org/2000/svg" },
+        React.createElement("rect", { width: "1080", height: "1080", fill: c.bg }),
+        template === "oferta" && (React.createElement(React.Fragment, null,
+            React.createElement("rect", { x: "0", y: "0", width: "1080", height: "140", fill: c.chip }),
+            React.createElement("text", { x: "60", y: "95", fontFamily: "Arial Black, sans-serif", fontSize: "72", fontWeight: "900", fill: c.accent }, "OFERTA"),
+            React.createElement("circle", { cx: "540", cy: "540", r: "300", fill: "#ffffff22" }),
+            React.createElement("text", { x: "540", y: "580", fontSize: "220", textAnchor: "middle" }, emoji),
+            React.createElement("text", { x: "60", y: "820", fontFamily: "Arial, sans-serif", fontSize: "46", fontWeight: "700", fill: "#fff" }, truncate(product.title, 40)),
+            original && React.createElement("text", { x: "60", y: "900", fontFamily: "Arial", fontSize: "40", fill: "#ffffffaa", textDecoration: "line-through" }, original),
+            React.createElement("text", { x: "60", y: "970", fontFamily: "Arial Black", fontSize: "80", fontWeight: "900", fill: c.chip }, price))),
+        template === "desconto" && (React.createElement(React.Fragment, null,
+            React.createElement("text", { x: "540", y: "360", fontFamily: "Arial Black", fontSize: "220", fontWeight: "900", fill: c.accent, textAnchor: "middle" },
+                "-",
+                product.discountPercentage,
+                "%"),
+            React.createElement("text", { x: "540", y: "440", fontFamily: "Arial", fontSize: "36", fill: "#ffffffaa", textAnchor: "middle" }, "DE DESCONTO"),
+            React.createElement("text", { x: "540", y: "640", fontSize: "200", textAnchor: "middle" }, emoji),
+            React.createElement("text", { x: "540", y: "820", fontFamily: "Arial", fontSize: "42", fill: "#fff", textAnchor: "middle" }, truncate(product.title, 36)),
+            React.createElement("rect", { x: "340", y: "880", width: "400", height: "110", rx: "55", fill: c.chip }),
+            React.createElement("text", { x: "540", y: "952", fontFamily: "Arial Black", fontSize: "56", fontWeight: "900", fill: c.accent, textAnchor: "middle" }, price))),
+        template === "achadinho" && (React.createElement(React.Fragment, null,
+            React.createElement("rect", { x: "50", y: "50", width: "980", height: "980", rx: "40", fill: "none", stroke: c.accent, strokeWidth: "6", strokeDasharray: "14 10" }),
+            React.createElement("text", { x: "540", y: "180", fontFamily: "Arial Black", fontSize: "52", fontWeight: "900", fill: c.accent, textAnchor: "middle" }, "\u2728 ACHADINHO \u2728"),
+            React.createElement("text", { x: "540", y: "560", fontSize: "230", textAnchor: "middle" }, emoji),
+            React.createElement("text", { x: "540", y: "740", fontFamily: "Arial", fontSize: "40", fill: c.chip, textAnchor: "middle" }, truncate(product.title, 38)),
+            React.createElement("text", { x: "540", y: "880", fontFamily: "Arial Black", fontSize: "70", fontWeight: "900", fill: c.accent, textAnchor: "middle" }, price),
+            original && React.createElement("text", { x: "540", y: "930", fontFamily: "Arial", fontSize: "34", fill: "#999", textAnchor: "middle", textDecoration: "line-through" }, original))),
+        template === "minimalista" && (React.createElement(React.Fragment, null,
+            React.createElement("text", { x: "540", y: "440", fontSize: "260", textAnchor: "middle" }, emoji),
+            React.createElement("line", { x1: "340", y1: "560", x2: "740", y2: "560", stroke: c.chip, strokeWidth: "4" }),
+            React.createElement("text", { x: "540", y: "640", fontFamily: "Arial", fontSize: "38", fill: c.accent, textAnchor: "middle" }, truncate(product.title, 34)),
+            React.createElement("text", { x: "540", y: "740", fontFamily: "Arial Black", fontSize: "64", fontWeight: "900", fill: c.chip, textAnchor: "middle" }, price))),
+        React.createElement("text", { x: "1020", y: "1050", fontFamily: "Arial", fontSize: "22", fill: dark ? "#00000055" : "#ffffff88", textAnchor: "end" }, "shopee ads ai")));
+}
+const LOADING_STEPS = ["Link recebido", "Produto identificado", "Analisando produto...", "Criando texto...", "Criando arte...", "Finalizando anúncio..."];
+const BRAND = { primary: "#FF4B3E", ink: "#1A1A2E", cream: "#FFF8F0", lime: "#C6F135" };
+function Logo() {
+    return (React.createElement("div", { className: "flex items-center gap-2" },
+        React.createElement("div", { className: "w-8 h-8 rounded-lg flex items-center justify-center", style: { background: BRAND.primary } },
+            React.createElement("span", { className: "icon text-white" }, "\u2728")),
+        React.createElement("span", { className: "font-bold text-lg", style: { color: BRAND.ink } }, "Shopee Ads AI")));
+}
+function ConnectionBanner({ online, onRetry }) {
+    if (online !== false)
+        return null;
+    return (React.createElement("div", { className: "flex items-center gap-2 px-4 py-2 text-xs font-medium", style: { background: "#FEF2F2", color: "#B91C1C" } },
+        React.createElement("span", { className: "icon" }, "\u26A0\uFE0F"),
+        "N\u00E3o consegui falar com o backend. Confira se ele est\u00E1 rodando (\"npm run dev\" na pasta backend).",
+        React.createElement("button", { onClick: onRetry, className: "ml-auto underline flex-shrink-0" }, "Tentar de novo")));
+}
+function NavBar({ screen, setScreen }) {
+    const items = [
+        { key: "home", label: "Novo anúncio", emoji: "✨" },
+        { key: "history", label: "Meus anúncios", emoji: "🕘" },
+        { key: "dashboard", label: "Dashboard", emoji: "📊" },
+    ];
+    return (React.createElement("div", { className: "flex items-center justify-between px-6 py-4 border-b", style: { borderColor: "#00000010" } },
+        React.createElement(Logo, null),
+        React.createElement("div", { className: "flex gap-1 bg-black/5 rounded-full p-1" }, items.map((it) => {
+            const active = screen === it.key || (screen === "loading" && it.key === "home") || (screen === "result" && it.key === "home");
+            return (React.createElement("button", { key: it.key, onClick: () => setScreen(it.key), className: "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors", style: active ? { background: "#fff", color: BRAND.ink, boxShadow: "0 1px 3px rgba(0,0,0,.1)" } : { color: "#00000066" } },
+                React.createElement("span", null, it.emoji),
+                " ",
+                it.label));
+        }))));
+}
+function ExampleCard({ p }) {
+    return (React.createElement("div", { className: "rounded-2xl p-4 bg-white border", style: { borderColor: "#00000010", minWidth: 220 } },
+        React.createElement("div", { className: "text-5xl mb-2" }, p.images[0]),
+        React.createElement("div", { className: "text-sm font-semibold line-clamp-2", style: { color: BRAND.ink } }, p.title),
+        React.createElement("div", { className: "flex items-baseline gap-2 mt-2" },
+            React.createElement("span", { className: "font-bold", style: { color: BRAND.primary } }, money(p.price)),
+            p.originalPrice && React.createElement("span", { className: "text-xs text-gray-400 line-through" }, money(p.originalPrice)))));
+}
+function HomeScreen({ link, setLink, onGenerate, error }) {
+    return (React.createElement("div", { className: "flex flex-col items-center px-6 py-16", style: { background: BRAND.cream, minHeight: "100%" } },
+        React.createElement("div", { className: "max-w-xl w-full text-center" },
+            React.createElement("div", { className: "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold mb-6", style: { background: `${BRAND.lime}55`, color: BRAND.ink } },
+                React.createElement("span", null, "\u2728"),
+                " Feito para afiliados que n\u00E3o t\u00EAm tempo a perder"),
+            React.createElement("h1", { className: "text-4xl font-extrabold leading-tight mb-4", style: { color: BRAND.ink } }, "Transforme qualquer produto da Shopee em uma publica\u00E7\u00E3o pronta para vender."),
+            React.createElement("p", { className: "text-gray-500 mb-8" }, "Cole o link, clique em gerar e receba texto + arte prontos para postar."),
+            React.createElement("div", { className: "flex flex-col sm:flex-row gap-2 items-stretch" },
+                React.createElement("div", { className: "flex items-center gap-2 flex-1 bg-white rounded-xl px-4 py-3 border", style: { borderColor: error ? BRAND.primary : "#00000015" } },
+                    React.createElement("span", { className: "text-gray-400 flex-shrink-0" }, "\uD83D\uDD17"),
+                    React.createElement("input", { value: link, onChange: (e) => setLink(e.target.value), placeholder: "Cole o link do produto Shopee", className: "flex-1 outline-none text-sm bg-transparent", onKeyDown: (e) => e.key === "Enter" && onGenerate() })),
+                React.createElement("button", { onClick: onGenerate, className: "rounded-xl px-6 py-3 font-semibold text-white flex items-center justify-center gap-2 whitespace-nowrap transition-transform active:scale-95", style: { background: BRAND.primary } },
+                    React.createElement("span", null, "\u2728"),
+                    " Gerar an\u00FAncio")),
+            error && React.createElement("p", { className: "text-sm mt-2 text-left", style: { color: BRAND.primary } }, error),
+            React.createElement("p", { className: "text-xs text-gray-400 mt-3" }, "Nesta vers\u00E3o os dados do produto e o texto de IA ainda s\u00E3o simulados pelo backend.")),
+        React.createElement("div", { className: "mt-16 w-full max-w-4xl" },
+            React.createElement("p", { className: "text-sm font-semibold text-gray-500 mb-4" }, "Exemplos de an\u00FAncios gerados"),
+            React.createElement("div", { className: "flex gap-4 overflow-x-auto pb-2" }, EXAMPLES.map((p, i) => React.createElement(ExampleCard, { key: i, p: p }))))));
+}
+function LoadingScreen({ step }) {
+    return (React.createElement("div", { className: "flex flex-col items-center justify-center px-6 py-24", style: { background: BRAND.cream, minHeight: "100%" } },
+        React.createElement("div", { className: "w-16 h-16 rounded-2xl flex items-center justify-center mb-8 animate-pulse", style: { background: BRAND.primary } },
+            React.createElement("span", { className: "text-2xl" }, "\u2728")),
+        React.createElement("div", { className: "max-w-xs w-full space-y-3" }, LOADING_STEPS.map((label, i) => {
+            const done = i < step, current = i === step;
+            return (React.createElement("div", { key: label, className: "flex items-center gap-3 text-sm" },
+                React.createElement("span", { className: "w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-white text-xs", style: { background: done ? "#22c55e" : current ? BRAND.primary : "#00000015" } }, done ? "✓" : ""),
+                React.createElement("span", { style: { color: done || current ? BRAND.ink : "#00000055", fontWeight: current ? 600 : 400 } }, label)));
+        }))));
+}
+function ResultScreen({ product, text, setText, style, setStyle, template, setTemplate, onRegenText, artRef, onDownload, onCopy, copied, onPublish, affLink, saveMsg }) {
+    return (React.createElement("div", { className: "grid md:grid-cols-2 gap-8 p-6 md:p-10", style: { background: BRAND.cream, minHeight: "100%" } },
+        React.createElement("div", null,
+            React.createElement("div", { ref: artRef, className: "rounded-2xl overflow-hidden shadow-lg border bg-white max-w-md mx-auto", style: { borderColor: "#00000010", aspectRatio: "1 / 1" } },
+                React.createElement(ArtSvg, { product: product, template: template })),
+            React.createElement("div", { className: "flex flex-wrap gap-2 justify-center mt-4 max-w-md mx-auto" }, ART_TEMPLATES.map((t) => (React.createElement("button", { key: t.key, onClick: () => setTemplate(t.key), className: "px-3 py-1.5 rounded-full text-xs font-medium border", style: template === t.key ? { background: BRAND.ink, color: "#fff", borderColor: BRAND.ink } : { color: BRAND.ink, borderColor: "#00000015" } }, t.label)))),
+            React.createElement("div", { className: "flex gap-2 justify-center mt-4 max-w-md mx-auto" },
+                React.createElement("button", { onClick: onDownload, className: "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold text-white", style: { background: BRAND.primary } },
+                    React.createElement("span", null, "\u2B07\uFE0F"),
+                    " Baixar imagem"))),
+        React.createElement("div", { className: "max-w-md w-full mx-auto md:mx-0" },
+            React.createElement("h2", { className: "text-2xl font-bold mb-1", style: { color: BRAND.ink } }, "Seu an\u00FAncio est\u00E1 pronto!"),
+            React.createElement("p", { className: "text-sm text-gray-500 mb-4" }, product.title),
+            React.createElement("div", { className: "flex flex-wrap gap-2 mb-3" }, TEXT_STYLES.map((s) => (React.createElement("button", { key: s.key, onClick: () => setStyle(s.key), className: "px-3 py-1.5 rounded-full text-xs font-medium border", style: style === s.key ? { background: BRAND.lime, color: BRAND.ink, borderColor: BRAND.lime } : { color: BRAND.ink, borderColor: "#00000015" } },
+                s.emoji,
+                " ",
+                s.label)))),
+            React.createElement("textarea", { value: text, onChange: (e) => setText(e.target.value), rows: 10, className: "w-full rounded-xl border p-4 text-sm outline-none bg-white resize-none", style: { borderColor: "#00000015", color: BRAND.ink } }),
+            React.createElement("div", { className: "flex gap-2 mt-3" },
+                React.createElement("button", { onClick: onCopy, className: "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border flex-1 justify-center", style: { borderColor: "#00000015", color: BRAND.ink } },
+                    React.createElement("span", null, copied ? "✅" : "📋"),
+                    " ",
+                    copied ? "Copiado!" : "Copiar texto"),
+                React.createElement("button", { onClick: onRegenText, className: "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border flex-1 justify-center", style: { borderColor: "#00000015", color: BRAND.ink } },
+                    React.createElement("span", null, "\uD83D\uDD04"),
+                    " Gerar novo texto")),
+            React.createElement("div", { className: "mt-5 p-3 rounded-xl bg-white border text-xs flex items-center gap-2", style: { borderColor: "#00000010" } },
+                React.createElement("span", { className: "text-gray-400 flex-shrink-0" }, "\uD83D\uDD17"),
+                React.createElement("span", { className: "truncate text-gray-500" }, affLink),
+                React.createElement("span", { className: "ml-auto text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-400 flex-shrink-0" }, "mock afiliado")),
+            React.createElement("button", { onClick: onPublish, className: "w-full mt-4 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-white", style: { background: BRAND.ink } },
+                React.createElement("span", null, "\uD83D\uDE80"),
+                " Publicar"),
+            saveMsg && React.createElement("p", { className: "text-xs text-center mt-2 text-gray-400" }, saveMsg))));
+}
+function PublishModal({ onClose, platforms, onSelect, publishing }) {
+    return (React.createElement("div", { className: "fixed inset-0 bg-black/40 flex items-center justify-center p-6 z-50", onClick: onClose },
+        React.createElement("div", { className: "bg-white rounded-2xl p-6 max-w-sm w-full", onClick: (e) => e.stopPropagation() },
+            React.createElement("div", { className: "flex items-center justify-between mb-4" },
+                React.createElement("h3", { className: "font-bold", style: { color: BRAND.ink } }, "Publicar em"),
+                React.createElement("button", { onClick: onClose }, "\u2715")),
+            React.createElement("div", { className: "grid grid-cols-3 gap-3" }, platforms.map((p) => (React.createElement("button", { key: p.key, disabled: !p.ready || publishing, onClick: () => p.ready && onSelect(p.key), className: "flex flex-col items-center gap-1.5 p-3 rounded-xl border text-xs", style: p.ready ? { borderColor: "#00000015", color: BRAND.ink, cursor: "pointer" } : { borderColor: "#00000008", color: "#00000033", cursor: "not-allowed" } },
+                React.createElement("span", { className: "text-xl" }, PLATFORM_EMOJI[p.key] || "🚀"),
+                p.label,
+                !p.ready && React.createElement("span", { className: "text-xs" }, "em breve"))))),
+            React.createElement("p", { className: "text-xs text-gray-400 mt-4" }, "WhatsApp, Telegram e Facebook abrem o compartilhamento real do navegador. Instagram e TikTok ainda n\u00E3o t\u00EAm API configurada."))));
+}
+function HistoryScreen({ items, onOpen }) {
+    if (items.length === 0) {
+        return (React.createElement("div", { className: "flex flex-col items-center justify-center py-24 text-center px-6", style: { background: BRAND.cream, minHeight: "100%" } },
+            React.createElement("span", { className: "text-4xl mb-3" }, "\uD83D\uDDBC\uFE0F"),
+            React.createElement("p", { className: "font-semibold", style: { color: BRAND.ink } }, "Nenhum an\u00FAncio ainda"),
+            React.createElement("p", { className: "text-sm text-gray-400" }, "Gere seu primeiro an\u00FAncio para v\u00EA-lo aqui.")));
+    }
+    return (React.createElement("div", { className: "p-6 md:p-10", style: { background: BRAND.cream, minHeight: "100%" } },
+        React.createElement("h2", { className: "text-xl font-bold mb-5", style: { color: BRAND.ink } }, "Meus an\u00FAncios"),
+        React.createElement("div", { className: "grid sm:grid-cols-2 lg:grid-cols-3 gap-4" }, items.map((it) => {
+            var _a, _b, _c, _d, _e, _f;
+            const styleLabel = ((_a = TEXT_STYLES.find((s) => s.key === it.style)) === null || _a === void 0 ? void 0 : _a.label) || it.style;
+            const date = it.createdAt ? new Date(it.createdAt).toLocaleDateString("pt-BR") : "";
+            const published = it.status === "publicado";
+            return (React.createElement("div", { key: it.id, className: "bg-white rounded-2xl p-4 border", style: { borderColor: "#00000010" } },
+                React.createElement("div", { className: "text-4xl mb-2" }, (_d = (_c = (_b = it.product) === null || _b === void 0 ? void 0 : _b.images) === null || _c === void 0 ? void 0 : _c[0]) !== null && _d !== void 0 ? _d : "🛍️"),
+                React.createElement("p", { className: "text-sm font-semibold line-clamp-2", style: { color: BRAND.ink } }, (_e = it.product) === null || _e === void 0 ? void 0 : _e.title),
+                React.createElement("div", { className: "flex items-center justify-between mt-2 text-xs text-gray-400" },
+                    React.createElement("span", null, money((_f = it.product) === null || _f === void 0 ? void 0 : _f.price)),
+                    React.createElement("span", null, date)),
+                React.createElement("div", { className: "flex items-center gap-1.5 mt-2" },
+                    React.createElement("span", { className: "text-xs px-2 py-0.5 rounded-full bg-black/5", style: { color: BRAND.ink } }, styleLabel),
+                    React.createElement("span", { className: "text-xs px-2 py-0.5 rounded-full", style: published ? { background: "#22c55e22", color: "#16a34a" } : { background: "#00000010", color: "#00000066" } }, published ? "Publicado" : "Rascunho")),
+                React.createElement("button", { onClick: () => onOpen(it), className: "w-full mt-3 flex items-center justify-center gap-1 text-xs font-semibold py-2 rounded-lg border", style: { borderColor: "#00000015", color: BRAND.ink } }, "Abrir \u203A")));
+        }))));
+}
+function StatCard({ label, value }) {
+    return (React.createElement("div", { className: "bg-white rounded-2xl p-5 border", style: { borderColor: "#00000010" } },
+        React.createElement("p", { className: "text-xs text-gray-400" }, label),
+        React.createElement("p", { className: "text-3xl font-extrabold mt-1", style: { color: BRAND.ink } }, value)));
+}
+function DashboardScreen({ stats }) {
+    const s = stats || { adsCreated: 0, productsProcessed: 0, artsGenerated: 0, publications: 0 };
+    return (React.createElement("div", { className: "p-6 md:p-10", style: { background: BRAND.cream, minHeight: "100%" } },
+        React.createElement("h2", { className: "text-xl font-bold mb-5", style: { color: BRAND.ink } }, "Dashboard"),
+        React.createElement("div", { className: "grid sm:grid-cols-2 lg:grid-cols-4 gap-4" },
+            React.createElement(StatCard, { label: "An\u00FAncios criados", value: s.adsCreated }),
+            React.createElement(StatCard, { label: "Produtos processados", value: s.productsProcessed }),
+            React.createElement(StatCard, { label: "Artes geradas", value: s.artsGenerated }),
+            React.createElement(StatCard, { label: "Publica\u00E7\u00F5es", value: s.publications })),
+        React.createElement("div", { className: "mt-8 p-5 rounded-2xl border border-dashed", style: { borderColor: "#00000020" } },
+            React.createElement("p", { className: "text-sm font-semibold", style: { color: BRAND.ink } }, "Em breve (requer integra\u00E7\u00E3o real)"),
+            React.createElement("div", { className: "grid sm:grid-cols-4 gap-4 mt-3 text-sm text-gray-400" },
+                React.createElement("span", null, "Cliques"),
+                React.createElement("span", null, "Convers\u00F5es"),
+                React.createElement("span", null, "Comiss\u00F5es"),
+                React.createElement("span", null, "Produtos mais vendidos")))));
+}
+function ShopeeAdsAI() {
+    const [screen, setScreen] = useState("home");
+    const [online, setOnline] = useState(null);
+    const [link, setLink] = useState("");
+    const [error, setError] = useState("");
+    const [loadStep, setLoadStep] = useState(0);
+    const [product, setProduct] = useState(null);
+    const [adId, setAdId] = useState(null);
+    const [style, setStyle] = useState("oferta");
+    const [template, setTemplate] = useState("oferta");
+    const [text, setText] = useState("");
+    const [affLink, setAffLink] = useState("");
+    const [copied, setCopied] = useState(false);
+    const [saveMsg, setSaveMsg] = useState("");
+    const [showPublish, setShowPublish] = useState(false);
+    const [platforms, setPlatforms] = useState([]);
+    const [publishing, setPublishing] = useState(false);
+    const [history, setHistory] = useState([]);
+    const [stats, setStats] = useState(null);
+    const artRef = useRef(null);
+    const checkHealth = useCallback(() => {
+        api.health().then(() => setOnline(true)).catch(() => setOnline(false));
+    }, []);
+    useEffect(() => { checkHealth(); }, [checkHealth]);
+    useEffect(() => {
+        if (screen === "history")
+            api.listAds().then(setHistory).catch(() => { });
+        if (screen === "dashboard")
+            api.dashboard().then(setStats).catch(() => { });
+    }, [screen]);
+    useEffect(() => {
+        if (showPublish)
+            api.platforms().then(setPlatforms).catch(() => setPlatforms([]));
+    }, [showPublish]);
+    const runGeneration = useCallback(async (rawLink) => {
+        setScreen("loading");
+        setLoadStep(0);
+        const ticker = setInterval(() => setLoadStep((s) => (s < LOADING_STEPS.length - 1 ? s + 1 : s)), 450);
+        try {
+            const { product: p, text: t, affiliateLink } = await api.generate(rawLink, style);
+            clearInterval(ticker);
+            setLoadStep(LOADING_STEPS.length);
+            setProduct(p);
+            setText(t);
+            setAffLink(affiliateLink);
+            setAdId(null);
+            setTimeout(() => setScreen("result"), 300);
+        }
+        catch (err) {
+            clearInterval(ticker);
+            setError(err.message || "Erro ao gerar o anúncio. Tente novamente.");
+            setScreen("home");
+        }
+    }, [style]);
+    const onGenerate = () => {
+        if (!link.trim()) {
+            setError("Insira um link válido de produto da Shopee.");
+            return;
+        }
+        setError("");
+        runGeneration(link);
+    };
+    const onRegenText = async () => {
+        try {
+            const { text: t } = await api.regenerateText(product, style);
+            setText(t);
+        }
+        catch (err) {
+            setError(err.message);
+        }
+    };
+    const changeStyle = async (key) => {
+        setStyle(key);
+        try {
+            const { text: t } = await api.regenerateText(product, key);
+            setText(t);
+        }
+        catch (err) {
+            setError(err.message);
+        }
+    };
+    const onCopy = async () => {
+        try {
+            await navigator.clipboard.writeText(text);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        }
+        catch (_a) { }
+    };
+    const onDownload = () => {
+        var _a;
+        const svgEl = (_a = artRef.current) === null || _a === void 0 ? void 0 : _a.querySelector("svg");
+        if (!svgEl)
+            return;
+        const svgStr = new XMLSerializer().serializeToString(svgEl);
+        const svgBlob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" });
+        const url = URL.createObjectURL(svgBlob);
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 1080;
+            canvas.height = 1080;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0, 1080, 1080);
+            URL.revokeObjectURL(url);
+            canvas.toBlob((blob) => {
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = `anuncio-${product.id}.png`;
+                a.click();
+            });
+        };
+        img.src = url;
+    };
+    const ensureSavedAd = async () => {
+        if (adId) {
+            await api.updateAd(adId, { style, template, text, affiliateLink: affLink });
+            return adId;
+        }
+        const ad = await api.saveAd({ productId: product.id, style, template, text, affiliateLink: affLink });
+        setAdId(ad.id);
+        return ad.id;
+    };
+    const onPublish = () => setShowPublish(true);
+    const onSelectPlatform = async (platformKey) => {
+        setPublishing(true);
+        try {
+            const id = await ensureSavedAd();
+            const { shareUrl } = await api.publish(id, platformKey);
+            if (shareUrl)
+                window.open(shareUrl, "_blank");
+            setShowPublish(false);
+            setSaveMsg("Anúncio publicado e salvo em Meus anúncios.");
+        }
+        catch (err) {
+            setSaveMsg(err.message);
+        }
+        finally {
+            setPublishing(false);
+            setTimeout(() => setSaveMsg(""), 4000);
+        }
+    };
+    const openFromHistory = (item) => {
+        setProduct(item.product);
+        setText(item.text);
+        setTemplate(item.template || "oferta");
+        setStyle(item.style || "oferta");
+        setAffLink(item.affiliateLink || "");
+        setAdId(item.id);
+        setScreen("result");
+    };
+    const goHome = async () => {
+        if (product && !adId) {
+            api.saveAd({ productId: product.id, style, template, text, affiliateLink: affLink }).then((ad) => setAdId(ad.id)).catch(() => { });
+        }
+        else if (product && adId) {
+            api.updateAd(adId, { style, template, text, affiliateLink: affLink }).catch(() => { });
+        }
+        setLink("");
+        setError("");
+        setScreen("home");
+    };
+    const handleNav = (s) => { if (s === "home" && screen === "result")
+        goHome();
+    else
+        setScreen(s); };
+    return (React.createElement("div", { className: "w-full min-h-screen", style: { fontFamily: "Inter, system-ui, sans-serif" } },
+        React.createElement(NavBar, { screen: screen, setScreen: handleNav }),
+        React.createElement(ConnectionBanner, { online: online, onRetry: checkHealth }),
+        screen === "home" && React.createElement(HomeScreen, { link: link, setLink: setLink, onGenerate: onGenerate, error: error }),
+        screen === "loading" && React.createElement(LoadingScreen, { step: loadStep }),
+        screen === "result" && product && (React.createElement(ResultScreen, { product: product, text: text, setText: setText, style: style, setStyle: changeStyle, template: template, setTemplate: setTemplate, onRegenText: onRegenText, artRef: artRef, onDownload: onDownload, onCopy: onCopy, copied: copied, onPublish: onPublish, affLink: affLink, saveMsg: saveMsg })),
+        screen === "history" && React.createElement(HistoryScreen, { items: history, onOpen: openFromHistory }),
+        screen === "dashboard" && React.createElement(DashboardScreen, { stats: stats }),
+        showPublish && React.createElement(PublishModal, { onClose: () => setShowPublish(false), platforms: platforms, onSelect: onSelectPlatform, publishing: publishing })));
+}
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(ShopeeAdsAI, null));
+
+</script>
+</body>
+</html>
