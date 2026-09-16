@@ -1,18 +1,21 @@
 import { nanoid } from "nanoid";
 import * as cheerio from "cheerio";
+import { callShopeeAffiliateApi, hasCredentials } from "./shopeeAffiliateClient.js";
 
 /**
  * productService
  *
- * v2: tenta buscar o produto de verdade fazendo scraping da página pública
- * da Shopee (sem login, sem API paga). Isso é um "melhor esforço": a Shopee
- * pode bloquear acessos automatizados, exigir captcha, ou mudar a estrutura
- * da página sem aviso — quando isso acontece, lançamos um erro claro em vez
- * de fingir que funcionou.
+ * Ordem de tentativa:
+ *   1. API oficial de afiliados da Shopee, se SHOPEE_AFFILIATE_APP_ID e
+ *      SHOPEE_AFFILIATE_SECRET estiverem configurados (fetchProductViaApi).
+ *   2. Scraping da página pública, como reserva caso a API falhe ou não
+ *      tenha esse produto no catálogo (fetchProductViaScraping).
  *
- * Quando o programa de afiliados oficial da Shopee estiver configurado
- * (variável SHOPEE_API_KEY no .env), a busca passa a usar a API oficial em
- * vez de scraping — ver fetchProductViaApi() abaixo (ainda não implementada).
+ * IMPORTANTE: o formato exato da consulta da API (nomes de campos) foi
+ * montado com base em documentação de terceiros — eu não consegui testar
+ * contra a API real. Se der erro, me manda a mensagem exata que a Shopee
+ * devolver (aparece nos logs do servidor / na resposta de erro) que eu
+ * ajusto os nomes dos campos.
  */
 
 const REQUEST_TIMEOUT_MS = 12000;
@@ -24,12 +27,80 @@ export function isValidShopeeUrl(url) {
   return /shopee\.[a-z.]+\//i.test(url.trim()) || /^https?:\/\/(s\.)?shopee/i.test(url.trim());
 }
 
-/** Ponto de entrada usado pelo resto do app — decide a fonte dos dados. */
+/** Ponto de entrada usado pelo resto do app. */
 export async function fetchProduct(url) {
-  if (process.env.SHOPEE_API_KEY) {
-    return fetchProductViaApi(url);
+  if (hasCredentials()) {
+    try {
+      return await fetchProductViaApi(url);
+    } catch (err) {
+      console.warn("[productService] API falhou, tentando scraping como reserva:", err.message);
+    }
   }
   return fetchProductViaScraping(url);
+}
+
+/** Extrai shopId/itemId de um link de produto Shopee (padrões conhecidos). */
+function parseShopeeIds(url) {
+  const clean = url.split("?")[0];
+  // padrão novo: .../{algo}/{shopId}/{itemId}
+  let m = clean.match(/\/(\d{5,})\/(\d{5,})\/?$/);
+  if (m) return { shopId: m[1], itemId: m[2] };
+  // padrão antigo: ...-i.{shopId}.{itemId}
+  m = clean.match(/-i\.(\d+)\.(\d+)/);
+  if (m) return { shopId: m[1], itemId: m[2] };
+  return null;
+}
+
+async function fetchProductViaApi(url) {
+  const ids = parseShopeeIds(url);
+  if (!ids) {
+    throw new Error("Não foi possível identificar o produto a partir deste link (formato de URL não reconhecido).");
+  }
+
+  const query = `
+    query ProductOffer($itemId: Int64, $shopId: Int64) {
+      productOfferV2(itemId: $itemId, shopId: $shopId) {
+        nodes {
+          itemId
+          productName
+          price
+          priceMin
+          priceMax
+          priceDiscountRate
+          imageUrl
+          shopName
+          offerLink
+        }
+      }
+    }
+  `;
+  const variables = { itemId: Number(ids.itemId), shopId: Number(ids.shopId) };
+  const data = await callShopeeAffiliateApi(query, variables);
+  const node = data?.productOfferV2?.nodes?.[0];
+
+  if (!node) {
+    throw new Error("A API de afiliados não encontrou este produto no catálogo.");
+  }
+
+  const price = node.priceMin != null ? Number(node.priceMin) : node.price != null ? Number(node.price) : null;
+  const priceMax = node.priceMax != null ? Number(node.priceMax) : null;
+  const discountPercentage = node.priceDiscountRate != null ? Number(node.priceDiscountRate) : null;
+
+  return {
+    id: `shopee_${ids.shopId}_${ids.itemId}`,
+    url,
+    title: node.productName || "Produto Shopee",
+    images: node.imageUrl ? [node.imageUrl] : [],
+    price,
+    originalPrice: priceMax && priceMax !== price ? priceMax : null,
+    discountPercentage,
+    rating: null,
+    reviewCount: null,
+    description: null,
+    features: [],
+    seller: node.shopName || null,
+    category: null,
+  };
 }
 
 /**
@@ -53,13 +124,6 @@ export async function fetchProductMock(url) {
   const hash = hashString(url);
   const base = MOCK_PRODUCTS[hash % MOCK_PRODUCTS.length];
   return { id: `mock_${hash}_${nanoid(6)}`, url, ...base };
-}
-
-/** Ainda não implementada — entra quando SHOPEE_API_KEY estiver configurada. */
-async function fetchProductViaApi(url) {
-  throw new Error(
-    "A API oficial de afiliados da Shopee ainda não foi integrada. Remova SHOPEE_API_KEY do .env para usar o scraping, ou implemente fetchProductViaApi em productService.js."
-  );
 }
 
 /** Busca real via scraping da página pública do produto. */
