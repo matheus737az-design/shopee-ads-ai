@@ -58,7 +58,7 @@ async function fetchProductViaApi(url) {
   }
 
   const query = `
-    query ProductOffer($itemId: Int64, $shopId: Int64) {
+    query ProductOffer($itemId: String, $shopId: String) {
       productOfferV2(itemId: $itemId, shopId: $shopId) {
         nodes {
           itemId
@@ -74,7 +74,7 @@ async function fetchProductViaApi(url) {
       }
     }
   `;
-  const variables = { itemId: Number(ids.itemId), shopId: Number(ids.shopId) };
+  const variables = { itemId: String(ids.itemId), shopId: String(ids.shopId) };
   const data = await callShopeeAffiliateApi(query, variables);
   const node = data?.productOfferV2?.nodes?.[0];
 
