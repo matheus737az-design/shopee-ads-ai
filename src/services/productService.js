@@ -75,32 +75,66 @@ async function fetchProductViaApi(url) {
     }
   `;
   const variables = { itemId: String(ids.itemId), shopId: String(ids.shopId) };
-  const data = await callShopeeAffiliateApi(query, variables);
-  const node = data?.productOfferV2?.nodes?.[0];
 
-  if (!node) {
-    throw new Error("A API de afiliados não encontrou este produto no catálogo.");
+  try {
+    const data = await callShopeeAffiliateApi(query, variables);
+    const node = data?.productOfferV2?.nodes?.[0];
+    if (!node) {
+      throw new Error("A API de afiliados não encontrou este produto no catálogo.");
+    }
+
+    const price = node.priceMin != null ? Number(node.priceMin) : node.price != null ? Number(node.price) : null;
+    const priceMax = node.priceMax != null ? Number(node.priceMax) : null;
+    const discountPercentage = node.priceDiscountRate != null ? Number(node.priceDiscountRate) : null;
+
+    return {
+      id: `shopee_${ids.shopId}_${ids.itemId}`,
+      url,
+      title: node.productName || "Produto Shopee",
+      images: node.imageUrl ? [node.imageUrl] : [],
+      price,
+      originalPrice: priceMax && priceMax !== price ? priceMax : null,
+      discountPercentage,
+      rating: null,
+      reviewCount: null,
+      description: null,
+      features: [],
+      seller: node.shopName || null,
+      category: null,
+    };
+  } catch (err) {
+    // Diagnóstico único: pergunta pra própria API qual é o formato exato
+    // esperado, pra não continuarmos chutando o tipo/nome dos campos.
+    await logProductOfferSchema();
+    throw err;
   }
+}
 
-  const price = node.priceMin != null ? Number(node.priceMin) : node.price != null ? Number(node.price) : null;
-  const priceMax = node.priceMax != null ? Number(node.priceMax) : null;
-  const discountPercentage = node.priceDiscountRate != null ? Number(node.priceDiscountRate) : null;
-
-  return {
-    id: `shopee_${ids.shopId}_${ids.itemId}`,
-    url,
-    title: node.productName || "Produto Shopee",
-    images: node.imageUrl ? [node.imageUrl] : [],
-    price,
-    originalPrice: priceMax && priceMax !== price ? priceMax : null,
-    discountPercentage,
-    rating: null,
-    reviewCount: null,
-    description: null,
-    features: [],
-    seller: node.shopName || null,
-    category: null,
-  };
+async function logProductOfferSchema() {
+  try {
+    const introspection = `
+      query {
+        __type(name: "Query") {
+          fields {
+            name
+            args {
+              name
+              type { kind name ofType { kind name ofType { kind name ofType { kind name } } } }
+            }
+          }
+        }
+      }
+    `;
+    const data = await callShopeeAffiliateApi(introspection, {});
+    const fields = data?.__type?.fields || [];
+    const match = fields.find((f) => f.name.toLowerCase().includes("productoffer"));
+    console.warn("[productService] Formato esperado pela API da Shopee para busca de produto:", JSON.stringify(match, null, 2));
+    if (!match) {
+      console.warn("[productService] Campos disponíveis na API:", fields.map((f) => f.name).join(", "));
+    }
+  } catch (introspectionErr) {
+    console.warn("[productService] Não foi possível consultar o schema da API:", introspectionErr.message);
+  }
 }
 
 /**
