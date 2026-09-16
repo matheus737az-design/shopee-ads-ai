@@ -10,7 +10,7 @@ export const PLATFORMS = [
   { key: "whatsapp", label: "WhatsApp", ready: true },
   { key: "telegram", label: "Telegram", ready: true },
   { key: "facebook", label: "Facebook", ready: true },
-  { key: "instagram", label: "Instagram", ready: false },
+  { key: "instagram", label: "Instagram", ready: true }, // via compartilhamento nativo do navegador, tratado no frontend
   { key: "tiktok", label: "TikTok", ready: false },
 ];
 
