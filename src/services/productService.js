@@ -83,6 +83,12 @@ async function fetchProductViaApi(url) {
       throw new Error("A API de afiliados não encontrou este produto no catálogo.");
     }
 
+    // Log temporário de diagnóstico — mostra tudo que a API devolveu, pra
+    // conferirmos qual campo é a imagem em tamanho real e qual é o preço à
+    // vista (sem ainda saber os nomes certos desses campos).
+    console.warn("[productService] Produto bruto devolvido pela API:", JSON.stringify(node, null, 2));
+    await logProductOfferNodeSchema();
+
     const price = node.priceMin != null ? Number(node.priceMin) : node.price != null ? Number(node.price) : null;
     const priceMax = node.priceMax != null ? Number(node.priceMax) : null;
     const discountPercentage = node.priceDiscountRate != null ? Number(node.priceDiscountRate) : null;
@@ -107,6 +113,24 @@ async function fetchProductViaApi(url) {
     // esperado, pra não continuarmos chutando o tipo/nome dos campos.
     await logProductOfferSchema();
     throw err;
+  }
+}
+
+async function logProductOfferNodeSchema() {
+  try {
+    const introspection = `
+      query {
+        __schema {
+          types { name kind fields { name } }
+        }
+      }
+    `;
+    const data = await callShopeeAffiliateApi(introspection, {});
+    const types = (data?.__schema?.types || []).filter((t) => t.fields && /offer|product/i.test(t.name || ""));
+    const summary = types.map((t) => ({ name: t.name, fields: t.fields.map((f) => f.name) }));
+    console.warn("[productService] Campos disponíveis nos tipos de produto/oferta:", JSON.stringify(summary, null, 2));
+  } catch (e) {
+    console.warn("[productService] Falha ao listar campos disponíveis:", e.message);
   }
 }
 
