@@ -83,15 +83,15 @@ async function fetchProductViaApi(url) {
       throw new Error("A API de afiliados não encontrou este produto no catálogo.");
     }
 
-    // Log temporário de diagnóstico — mostra tudo que a API devolveu, pra
-    // conferirmos qual campo é a imagem em tamanho real e qual é o preço à
-    // vista (sem ainda saber os nomes certos desses campos).
+    // Log temporário de diagnóstico — mostra tudo que a API devolveu, útil
+    // se precisarmos investigar algum produto específico no futuro.
     console.warn("[productService] Produto bruto devolvido pela API:", JSON.stringify(node, null, 2));
-    await logProductOfferNodeSchema();
 
-    const price = node.priceMin != null ? Number(node.priceMin) : node.price != null ? Number(node.price) : null;
-    const priceMax = node.priceMax != null ? Number(node.priceMax) : null;
+    const price = node.price != null ? Number(node.price) : null;
     const discountPercentage = node.priceDiscountRate != null ? Number(node.priceDiscountRate) : null;
+    // A API não expõe um campo de "preço original" — calculamos a partir do desconto.
+    const originalPrice =
+      price != null && discountPercentage ? Math.round((price / (1 - discountPercentage / 100)) * 100) / 100 : null;
 
     return {
       id: `shopee_${ids.shopId}_${ids.itemId}`,
@@ -99,7 +99,7 @@ async function fetchProductViaApi(url) {
       title: node.productName || "Produto Shopee",
       images: node.imageUrl ? [node.imageUrl] : [],
       price,
-      originalPrice: priceMax && priceMax !== price ? priceMax : null,
+      originalPrice,
       discountPercentage,
       rating: null,
       reviewCount: null,
