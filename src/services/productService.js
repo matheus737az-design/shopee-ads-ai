@@ -58,7 +58,7 @@ async function fetchProductViaApi(url) {
   }
 
   const query = `
-    query ProductOffer($itemId: String, $shopId: String) {
+    query ProductOffer($itemId: Int64, $shopId: Int64) {
       productOfferV2(itemId: $itemId, shopId: $shopId) {
         nodes {
           itemId
