@@ -77,7 +77,7 @@ function proxiedImage(url) {
 const DISPLAY_FONT = "'Space Grotesk', 'Arial Black', sans-serif";
 /** Foto circular do produto (com moldura), ou o emoji de reserva quando não há foto real. */
 function ProductVisual({ cx, cy, r, src, ringColor }) {
-    const isPhoto = typeof src === "string" && src.startsWith("http");
+    const isPhoto = typeof src === "string" && (src.startsWith("http") || src.startsWith("data:image"));
     if (!isPhoto) {
         return React.createElement("text", { x: cx, y: cy + r * 0.32, fontSize: r * 1.65, textAnchor: "middle" }, src || "🛍️");
     }
@@ -213,12 +213,37 @@ function LoadingScreen({ step }) {
                 React.createElement("span", { style: { color: done || current ? BRAND.ink : "#00000055", fontWeight: current ? 600 : 400 } }, label)));
         }))));
 }
-function ResultScreen({ product, text, setText, style, setStyle, template, setTemplate, onRegenText, artRef, onDownload, onCopy, copied, onPublish, affLink, saveMsg }) {
+function ResultScreen({ product, onUpdateProduct, text, setText, style, setStyle, template, setTemplate, onRegenText, artRef, onDownload, onCopy, copied, onPublish, affLink, saveMsg }) {
+    var _a, _b, _c, _d;
+    const fileInputRef = useRef(null);
+    const onPickPhoto = (e) => {
+        var _a;
+        const file = (_a = e.target.files) === null || _a === void 0 ? void 0 : _a[0];
+        if (!file)
+            return;
+        const reader = new FileReader();
+        reader.onload = () => onUpdateProduct({ images: [reader.result] });
+        reader.readAsDataURL(file);
+    };
     return (React.createElement("div", { className: "grid md:grid-cols-2 gap-8 p-6 md:p-10", style: { background: BRAND.cream, minHeight: "100%" } },
         React.createElement("div", null,
             React.createElement("div", { ref: artRef, className: "rounded-2xl overflow-hidden shadow-lg border bg-white max-w-md mx-auto", style: { borderColor: "#00000010", aspectRatio: "1 / 1" } },
                 React.createElement(ArtSvg, { product: product, template: template })),
             React.createElement("div", { className: "flex flex-wrap gap-2 justify-center mt-4 max-w-md mx-auto" }, ART_TEMPLATES.map((t) => (React.createElement("button", { key: t.key, onClick: () => setTemplate(t.key), className: "px-3 py-1.5 rounded-full text-xs font-medium border", style: template === t.key ? { background: BRAND.ink, color: "#fff", borderColor: BRAND.ink } : { color: BRAND.ink, borderColor: "#00000015" } }, t.label)))),
+            React.createElement("div", { className: "mt-4 max-w-md mx-auto bg-white rounded-xl border p-3", style: { borderColor: "#00000010" } },
+                React.createElement("p", { className: "text-xs font-semibold mb-2", style: { color: BRAND.ink } }, ((_a = product.images) === null || _a === void 0 ? void 0 : _a[0]) ? "Foto ou preço errado? Ajuste aqui:" : "Adicione a foto real do produto:"),
+                React.createElement("input", { ref: fileInputRef, type: "file", accept: "image/*", onChange: onPickPhoto, className: "hidden" }),
+                React.createElement("button", { onClick: () => { var _a; return (_a = fileInputRef.current) === null || _a === void 0 ? void 0 : _a.click(); }, className: "w-full flex items-center justify-center gap-1.5 text-sm font-semibold py-2.5 rounded-lg text-white mb-2", style: { background: BRAND.ink } },
+                    React.createElement("span", null, "\uD83D\uDDBC\uFE0F"),
+                    " ",
+                    ((_b = product.images) === null || _b === void 0 ? void 0 : _b[0]) ? "Trocar foto" : "Enviar foto (print ou salvar do app da Shopee)"),
+                React.createElement("div", { className: "flex gap-2" },
+                    React.createElement("label", { className: "flex-1 text-xs text-gray-500" },
+                        "Pre\u00E7o atual",
+                        React.createElement("input", { type: "number", step: "0.01", value: (_c = product.price) !== null && _c !== void 0 ? _c : "", placeholder: "0,00", onChange: (e) => onUpdateProduct({ price: e.target.value === "" ? null : Number(e.target.value) }), className: "w-full mt-1 border rounded-lg px-2 py-1.5 text-sm", style: { borderColor: "#00000015", color: BRAND.ink } })),
+                    React.createElement("label", { className: "flex-1 text-xs text-gray-500" },
+                        "Pre\u00E7o anterior (opcional)",
+                        React.createElement("input", { type: "number", step: "0.01", value: (_d = product.originalPrice) !== null && _d !== void 0 ? _d : "", placeholder: "0,00", onChange: (e) => onUpdateProduct({ originalPrice: e.target.value === "" ? null : Number(e.target.value) }), className: "w-full mt-1 border rounded-lg px-2 py-1.5 text-sm", style: { borderColor: "#00000015", color: BRAND.ink } })))),
             React.createElement("div", { className: "flex gap-2 justify-center mt-4 max-w-md mx-auto" },
                 React.createElement("button", { onClick: onDownload, className: "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold text-white", style: { background: BRAND.primary } },
                     React.createElement("span", null, "\u2B07\uFE0F"),
@@ -350,7 +375,10 @@ function ShopeeAdsAI() {
             const { product: p, text: t, affiliateLink } = await api.generate(rawLink, style);
             clearInterval(ticker);
             setLoadStep(LOADING_STEPS.length);
-            setProduct(p);
+            // A foto que a API de afiliados devolve não é confiável pra muitos produtos
+            // (testamos e veio uma imagem genérica errada mais de uma vez) — por isso
+            // começamos sem foto, e o usuário confirma/envia a real na tela de resultado.
+            setProduct({ ...p, images: [] });
             setText(t);
             setAffLink(affiliateLink);
             setAdId(null);
@@ -512,7 +540,7 @@ function ShopeeAdsAI() {
         React.createElement(ConnectionBanner, { online: online, onRetry: checkHealth }),
         screen === "home" && React.createElement(HomeScreen, { link: link, setLink: setLink, onGenerate: onGenerate, error: error }),
         screen === "loading" && React.createElement(LoadingScreen, { step: loadStep }),
-        screen === "result" && product && (React.createElement(ResultScreen, { product: product, text: text, setText: setText, style: style, setStyle: changeStyle, template: template, setTemplate: setTemplate, onRegenText: onRegenText, artRef: artRef, onDownload: onDownload, onCopy: onCopy, copied: copied, onPublish: onPublish, affLink: affLink, saveMsg: saveMsg })),
+        screen === "result" && product && (React.createElement(ResultScreen, { product: product, onUpdateProduct: (fields) => setProduct((p) => ({ ...p, ...fields })), text: text, setText: setText, style: style, setStyle: changeStyle, template: template, setTemplate: setTemplate, onRegenText: onRegenText, artRef: artRef, onDownload: onDownload, onCopy: onCopy, copied: copied, onPublish: onPublish, affLink: affLink, saveMsg: saveMsg })),
         screen === "history" && React.createElement(HistoryScreen, { items: history, onOpen: openFromHistory }),
         screen === "dashboard" && React.createElement(DashboardScreen, { stats: stats }),
         showPublish && React.createElement(PublishModal, { onClose: () => setShowPublish(false), platforms: platforms, onSelect: onSelectPlatform, publishing: publishing })));
