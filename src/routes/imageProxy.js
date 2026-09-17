@@ -28,14 +28,24 @@ router.get("/", async (req, res) => {
   }
 
   try {
-    const upstream = await fetch(url);
-    if (!upstream.ok) return res.status(502).send("Não foi possível buscar a imagem.");
+    const upstream = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        Referer: "https://shopee.com.br/",
+        Accept: "image/avif,image/webp,image/*,*/*",
+      },
+    });
+    if (!upstream.ok) {
+      console.warn(`[imageProxy] Shopee respondeu ${upstream.status} para ${url}`);
+      return res.status(502).send("Não foi possível buscar a imagem.");
+    }
     res.setHeader("Content-Type", upstream.headers.get("content-type") || "image/jpeg");
     res.setHeader("Cache-Control", "public, max-age=86400");
     const buf = Buffer.from(await upstream.arrayBuffer());
     res.send(buf);
-  } catch {
-    res.status(502).send("Erro ao buscar a imagem.");
+  } catch (err) {
+    console.warn("[imageProxy] Erro ao buscar imagem:", err.message);
+    res.status(502).send("Erro ao buscar imagem.");
   }
 });
 
