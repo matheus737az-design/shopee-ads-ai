@@ -214,8 +214,10 @@ function LoadingScreen({ step }) {
         }))));
 }
 function ResultScreen({ product, onUpdateProduct, text, setText, style, setStyle, template, setTemplate, onRegenText, artRef, onDownload, onCopy, copied, onPublish, affLink, saveMsg }) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c;
     const fileInputRef = useRef(null);
+    const currentImage = ((_a = product.images) === null || _a === void 0 ? void 0 : _a[0]) || "";
+    const isUploadedFile = currentImage.startsWith("data:");
     const onPickPhoto = (e) => {
         var _a;
         const file = (_a = e.target.files) === null || _a === void 0 ? void 0 : _a[0];
@@ -231,19 +233,22 @@ function ResultScreen({ product, onUpdateProduct, text, setText, style, setStyle
                 React.createElement(ArtSvg, { product: product, template: template })),
             React.createElement("div", { className: "flex flex-wrap gap-2 justify-center mt-4 max-w-md mx-auto" }, ART_TEMPLATES.map((t) => (React.createElement("button", { key: t.key, onClick: () => setTemplate(t.key), className: "px-3 py-1.5 rounded-full text-xs font-medium border", style: template === t.key ? { background: BRAND.ink, color: "#fff", borderColor: BRAND.ink } : { color: BRAND.ink, borderColor: "#00000015" } }, t.label)))),
             React.createElement("div", { className: "mt-4 max-w-md mx-auto bg-white rounded-xl border p-3", style: { borderColor: "#00000010" } },
-                React.createElement("p", { className: "text-xs font-semibold mb-2", style: { color: BRAND.ink } }, ((_a = product.images) === null || _a === void 0 ? void 0 : _a[0]) ? "Foto ou preço errado? Ajuste aqui:" : "Adicione a foto real do produto:"),
+                React.createElement("p", { className: "text-xs font-semibold mb-2", style: { color: BRAND.ink } }, "Foto do produto"),
+                React.createElement("label", { className: "text-xs text-gray-500 block mb-1" }, "Link da imagem (a que a Shopee encontrou aparece aqui \u2014 pode colar outro)"),
+                React.createElement("input", { type: "text", value: isUploadedFile ? "" : currentImage, placeholder: "https://...", onChange: (e) => onUpdateProduct({ images: [e.target.value] }), className: "w-full mb-2 border rounded-lg px-2 py-1.5 text-xs", style: { borderColor: "#00000015", color: BRAND.ink } }),
                 React.createElement("input", { ref: fileInputRef, type: "file", accept: "image/*", onChange: onPickPhoto, className: "hidden" }),
-                React.createElement("button", { onClick: () => { var _a; return (_a = fileInputRef.current) === null || _a === void 0 ? void 0 : _a.click(); }, className: "w-full flex items-center justify-center gap-1.5 text-sm font-semibold py-2.5 rounded-lg text-white mb-2", style: { background: BRAND.ink } },
+                React.createElement("button", { onClick: () => { var _a; return (_a = fileInputRef.current) === null || _a === void 0 ? void 0 : _a.click(); }, className: "w-full flex items-center justify-center gap-1.5 text-xs font-semibold py-2 rounded-lg border", style: { borderColor: "#00000015", color: BRAND.ink } },
                     React.createElement("span", null, "\uD83D\uDDBC\uFE0F"),
                     " ",
-                    ((_b = product.images) === null || _b === void 0 ? void 0 : _b[0]) ? "Trocar foto" : "Enviar foto (print ou salvar do app da Shopee)"),
-                React.createElement("div", { className: "flex gap-2" },
+                    isUploadedFile ? "Trocar por outro arquivo" : "Ou envie um arquivo do computador"),
+                React.createElement("p", { className: "text-[11px] text-gray-400 mt-2" }, "Dica: no site da Shopee, clique com o bot\u00E3o direito na foto do produto \u2192 \"Copiar endere\u00E7o da imagem\" \u2192 cole no campo acima."),
+                React.createElement("div", { className: "flex gap-2 mt-3" },
                     React.createElement("label", { className: "flex-1 text-xs text-gray-500" },
                         "Pre\u00E7o atual",
-                        React.createElement("input", { type: "number", step: "0.01", value: (_c = product.price) !== null && _c !== void 0 ? _c : "", placeholder: "0,00", onChange: (e) => onUpdateProduct({ price: e.target.value === "" ? null : Number(e.target.value) }), className: "w-full mt-1 border rounded-lg px-2 py-1.5 text-sm", style: { borderColor: "#00000015", color: BRAND.ink } })),
+                        React.createElement("input", { type: "number", step: "0.01", value: (_b = product.price) !== null && _b !== void 0 ? _b : "", placeholder: "0,00", onChange: (e) => onUpdateProduct({ price: e.target.value === "" ? null : Number(e.target.value) }), className: "w-full mt-1 border rounded-lg px-2 py-1.5 text-sm", style: { borderColor: "#00000015", color: BRAND.ink } })),
                     React.createElement("label", { className: "flex-1 text-xs text-gray-500" },
                         "Pre\u00E7o anterior (opcional)",
-                        React.createElement("input", { type: "number", step: "0.01", value: (_d = product.originalPrice) !== null && _d !== void 0 ? _d : "", placeholder: "0,00", onChange: (e) => onUpdateProduct({ originalPrice: e.target.value === "" ? null : Number(e.target.value) }), className: "w-full mt-1 border rounded-lg px-2 py-1.5 text-sm", style: { borderColor: "#00000015", color: BRAND.ink } })))),
+                        React.createElement("input", { type: "number", step: "0.01", value: (_c = product.originalPrice) !== null && _c !== void 0 ? _c : "", placeholder: "0,00", onChange: (e) => onUpdateProduct({ originalPrice: e.target.value === "" ? null : Number(e.target.value) }), className: "w-full mt-1 border rounded-lg px-2 py-1.5 text-sm", style: { borderColor: "#00000015", color: BRAND.ink } })))),
             React.createElement("div", { className: "flex gap-2 justify-center mt-4 max-w-md mx-auto" },
                 React.createElement("button", { onClick: onDownload, className: "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold text-white", style: { background: BRAND.primary } },
                     React.createElement("span", null, "\u2B07\uFE0F"),
@@ -375,10 +380,7 @@ function ShopeeAdsAI() {
             const { product: p, text: t, affiliateLink } = await api.generate(rawLink, style);
             clearInterval(ticker);
             setLoadStep(LOADING_STEPS.length);
-            // A foto que a API de afiliados devolve não é confiável pra muitos produtos
-            // (testamos e veio uma imagem genérica errada mais de uma vez) — por isso
-            // começamos sem foto, e o usuário confirma/envia a real na tela de resultado.
-            setProduct({ ...p, images: [] });
+            setProduct(p);
             setText(t);
             setAffLink(affiliateLink);
             setAdId(null);
