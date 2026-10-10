@@ -36,6 +36,21 @@ async function apiFetch(path, options) {
     }
     return res.json();
 }
+/** Chama /api/generate/art e devolve um blob de imagem (PNG), ou lança erro com a mensagem do backend. */
+async function apiGenerateArt(product, template, format, manualPhoto) {
+    const res = await fetch(`${API_BASE}/generate/art`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product, template, format, manualPhoto }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Erro ${res.status} ao gerar a arte.`);
+    }
+    const photoSource = res.headers.get("X-Photo-Source");
+    const blob = await res.blob();
+    return { blob, photoSource };
+}
 const api = {
     health: () => apiFetch("/health"),
     generate: (url, style) => apiFetch("/generate", { method: "POST", body: JSON.stringify({ url, style }) }),
@@ -47,7 +62,9 @@ const api = {
     publish: (adId, platform) => apiFetch(`/ads/${adId}/publish`, { method: "POST", body: JSON.stringify({ platform }) }),
     dashboard: () => apiFetch("/dashboard"),
 };
-function money(v) { return v == null ? null : v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
+function money(v) {
+    return v == null ? null : v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
 const TEXT_STYLES = [
     { key: "oferta", label: "Oferta", emoji: "🔥" },
     { key: "beneficio", label: "Benefício", emoji: "💡" },
@@ -55,89 +72,34 @@ const TEXT_STYLES = [
     { key: "viral", label: "Viral", emoji: "⚡" },
     { key: "profissional", label: "Profissional", emoji: "🛍️" },
 ];
+const ART_TEMPLATES = [
+    { key: "OFERTA", label: "Oferta", emoji: "🔥" },
+    { key: "ELEGANTE", label: "Elegante", emoji: "✨" },
+    { key: "MODERNO", label: "Moderno", emoji: "🧊" },
+    { key: "VIRAL", label: "Viral", emoji: "⚡" },
+];
+const ART_FORMATS = [
+    { key: "stories", label: "Stories", dims: "1080×1920", ratio: "1080 / 1920" },
+    { key: "feed", label: "Feed vertical", dims: "1080×1350", ratio: "1080 / 1350" },
+    { key: "quadrado", label: "Quadrado", dims: "1080×1080", ratio: "1 / 1" },
+];
+const CAPTION_FIELDS = [
+    { key: "whatsapp", label: "WhatsApp" },
+    { key: "instagram", label: "Instagram" },
+    { key: "alternative", label: "Alternativa" },
+];
 const PLATFORM_EMOJI = { whatsapp: "💬", telegram: "✈️", facebook: "📘", instagram: "📸", tiktok: "🎵" };
 const EXAMPLES = [
     { title: "Organizador de Gavetas 6 Divisórias", images: ["🗄️"], price: 39.9, originalPrice: 59.9 },
     { title: "Mini Umidificador USB com LED", images: ["💧"], price: 27.5, originalPrice: 45.0 },
     { title: "Fone Bluetooth TWS Prova D'água", images: ["🎧"], price: 59.9, originalPrice: 129.9 },
 ];
-const ART_TEMPLATES = [
-    { key: "oferta", label: "Oferta" },
-    { key: "desconto", label: "Desconto" },
-    { key: "achadinho", label: "Achadinho" },
-    { key: "minimalista", label: "Minimalista" },
-];
-function truncate(s, n) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }
-/** Usa nosso próprio backend como intermediário pra imagens da Shopee poderem ser usadas em <canvas> (baixar/compartilhar). */
-function proxiedImage(url) {
-    if (!url || typeof url !== "string" || !url.startsWith("http"))
-        return url;
-    return `/api/image-proxy?url=${encodeURIComponent(url)}`;
+function truncate(s, n) {
+    return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 const DISPLAY_FONT = "'Space Grotesk', 'Arial Black', sans-serif";
-/** Foto circular do produto (com moldura), ou o emoji de reserva quando não há foto real. */
-function ProductVisual({ cx, cy, r, src, ringColor }) {
-    const isPhoto = typeof src === "string" && (src.startsWith("http") || src.startsWith("data:image"));
-    if (!isPhoto) {
-        return React.createElement("text", { x: cx, y: cy + r * 0.32, fontSize: r * 1.65, textAnchor: "middle" }, src || "🛍️");
-    }
-    const clipId = `clip-${cx}-${cy}-${r}`;
-    return (React.createElement(React.Fragment, null,
-        React.createElement("defs", null,
-            React.createElement("clipPath", { id: clipId },
-                React.createElement("circle", { cx: cx, cy: cy, r: r }))),
-        React.createElement("circle", { cx: cx, cy: cy, r: r + 14, fill: "#ffffff" }),
-        React.createElement("circle", { cx: cx, cy: cy, r: r + 6, fill: "none", stroke: ringColor, strokeWidth: "4" }),
-        React.createElement("image", { href: proxiedImage(src), x: cx - r, y: cy - r, width: r * 2, height: r * 2, clipPath: `url(#${clipId})`, preserveAspectRatio: "xMidYMid slice" })));
-}
-function ArtSvg({ product, template }) {
-    var _a, _b;
-    const price = money(product.price);
-    const original = money(product.originalPrice);
-    const photo = (_b = (_a = product.images) === null || _a === void 0 ? void 0 : _a[0]) !== null && _b !== void 0 ? _b : null;
-    const palettes = {
-        oferta: { bg: "#FF4B3E", accent: "#1A1A2E", chip: "#FFD23F" },
-        desconto: { bg: "#1A1A2E", accent: "#FF4B3E", chip: "#C6F135" },
-        achadinho: { bg: "#FFF3E8", accent: "#FF4B3E", chip: "#1A1A2E" },
-        minimalista: { bg: "#FFFFFF", accent: "#1A1A2E", chip: "#FF4B3E" },
-    };
-    const c = palettes[template] || palettes.oferta;
-    const dark = template === "achadinho" || template === "minimalista";
-    return (React.createElement("svg", { viewBox: "0 0 1080 1080", width: "100%", height: "100%", xmlns: "http://www.w3.org/2000/svg" },
-        React.createElement("rect", { width: "1080", height: "1080", fill: c.bg }),
-        template === "oferta" && (React.createElement(React.Fragment, null,
-            React.createElement("rect", { x: "0", y: "0", width: "1080", height: "130", fill: c.chip }),
-            React.createElement("text", { x: "60", y: "90", fontFamily: DISPLAY_FONT, fontSize: "66", fontWeight: "800", fill: c.accent }, "Oferta do dia"),
-            React.createElement(ProductVisual, { cx: 540, cy: 520, r: 260, src: photo, ringColor: c.chip }),
-            React.createElement("text", { x: "60", y: "850", fontFamily: "Arial, sans-serif", fontSize: "44", fontWeight: "700", fill: "#fff" }, truncate(product.title, 40)),
-            original && React.createElement("text", { x: "60", y: "915", fontFamily: "Arial", fontSize: "38", fill: "#ffffffaa", textDecoration: "line-through" }, original),
-            React.createElement("text", { x: "60", y: "990", fontFamily: DISPLAY_FONT, fontSize: "76", fontWeight: "800", fill: c.chip }, price))),
-        template === "desconto" && (React.createElement(React.Fragment, null,
-            React.createElement("text", { x: "540", y: "150", fontFamily: "Arial", fontSize: "34", fill: "#ffffffaa", textAnchor: "middle", letterSpacing: "4" }, "DESCONTO IMPERD\u00CDVEL"),
-            React.createElement("text", { x: "540", y: "290", fontFamily: DISPLAY_FONT, fontSize: "180", fontWeight: "800", fill: c.accent, textAnchor: "middle" },
-                "-",
-                product.discountPercentage,
-                "%"),
-            React.createElement(ProductVisual, { cx: 540, cy: 600, r: 190, src: photo, ringColor: c.chip }),
-            React.createElement("text", { x: "540", y: "850", fontFamily: "Arial", fontSize: "40", fill: "#fff", textAnchor: "middle" }, truncate(product.title, 36)),
-            React.createElement("rect", { x: "330", y: "900", width: "420", height: "115", rx: "58", fill: c.chip }),
-            React.createElement("text", { x: "540", y: "975", fontFamily: DISPLAY_FONT, fontSize: "54", fontWeight: "800", fill: c.accent, textAnchor: "middle" }, price))),
-        template === "achadinho" && (React.createElement(React.Fragment, null,
-            React.createElement("rect", { x: "46", y: "46", width: "988", height: "988", rx: "44", fill: "none", stroke: c.accent, strokeWidth: "5", strokeDasharray: "2 18", strokeLinecap: "round" }),
-            React.createElement("text", { x: "540", y: "170", fontFamily: DISPLAY_FONT, fontSize: "46", fontWeight: "800", fill: c.accent, textAnchor: "middle" }, "achadinho da shopee"),
-            React.createElement(ProductVisual, { cx: 540, cy: 540, r: 220, src: photo, ringColor: c.accent }),
-            React.createElement("text", { x: "540", y: "800", fontFamily: "Arial", fontSize: "38", fill: c.chip, textAnchor: "middle" }, truncate(product.title, 38)),
-            React.createElement("text", { x: "540", y: "900", fontFamily: DISPLAY_FONT, fontSize: "66", fontWeight: "800", fill: c.accent, textAnchor: "middle" }, price),
-            original && React.createElement("text", { x: "540", y: "945", fontFamily: "Arial", fontSize: "32", fill: "#999", textAnchor: "middle", textDecoration: "line-through" }, original))),
-        template === "minimalista" && (React.createElement(React.Fragment, null,
-            React.createElement(ProductVisual, { cx: 540, cy: 420, r: 240, src: photo, ringColor: c.chip }),
-            React.createElement("line", { x1: "390", y1: "700", x2: "690", y2: "700", stroke: c.chip, strokeWidth: "3" }),
-            React.createElement("text", { x: "540", y: "770", fontFamily: "Arial", fontSize: "36", fill: c.accent, textAnchor: "middle" }, truncate(product.title, 34)),
-            React.createElement("text", { x: "540", y: "850", fontFamily: DISPLAY_FONT, fontSize: "60", fontWeight: "800", fill: c.chip, textAnchor: "middle" }, price))),
-        React.createElement("text", { x: "1020", y: "1045", fontFamily: "Arial", fontSize: "20", fill: dark ? "#00000055" : "#ffffff88", textAnchor: "end" }, "shopee ads ai")));
-}
-const LOADING_STEPS = ["Link recebido", "Produto identificado", "Analisando produto...", "Criando texto...", "Criando arte...", "Finalizando anúncio..."];
 const BRAND = { primary: "#FF4B3E", ink: "#1A1A2E", cream: "#FFF8F0", lime: "#C6F135" };
+const LOADING_STEPS = ["Link recebido", "Buscando produto e gerando texto...", "Produto e texto prontos", "Gerando a arte...", "Finalizando anúncio..."];
 function Logo() {
     return (React.createElement("div", { className: "flex items-center gap-2" },
         React.createElement("div", { className: "w-8 h-8 rounded-lg flex items-center justify-center", style: { background: BRAND.primary } },
@@ -213,67 +175,86 @@ function LoadingScreen({ step }) {
                 React.createElement("span", { style: { color: done || current ? BRAND.ink : "#00000055", fontWeight: current ? 600 : 400 } }, label)));
         }))));
 }
-function ResultScreen({ product, onUpdateProduct, text, setText, style, setStyle, template, setTemplate, onRegenText, artRef, onDownload, onCopy, copied, onPublish, affLink, saveMsg }) {
-    var _a, _b, _c;
+function ResultScreen({ product, onUpdateProduct, copy, activeCaptionKey, setActiveCaptionKey, text, setText, style, setStyle, template, setTemplate, format, setFormat, onRegenText, artUrl, artLoading, artError, onDownload, onCopyCaption, copiedField, onCopyLink, onPublish, affLink, isAffiliate, affiliateWarning, saveMsg, manualPhotoInput, setManualPhotoInput, onApplyManualPhotoUrl, onPickPhoto, }) {
+    var _a, _b;
     const fileInputRef = useRef(null);
-    const currentImage = ((_a = product.images) === null || _a === void 0 ? void 0 : _a[0]) || "";
-    const isUploadedFile = currentImage.startsWith("data:");
-    const onPickPhoto = (e) => {
-        var _a;
-        const file = (_a = e.target.files) === null || _a === void 0 ? void 0 : _a[0];
-        if (!file)
-            return;
-        const reader = new FileReader();
-        reader.onload = () => onUpdateProduct({ images: [reader.result] });
-        reader.readAsDataURL(file);
-    };
+    const currentFormat = ART_FORMATS.find((f) => f.key === format) || ART_FORMATS[0];
     return (React.createElement("div", { className: "grid md:grid-cols-2 gap-8 p-6 md:p-10", style: { background: BRAND.cream, minHeight: "100%" } },
         React.createElement("div", null,
-            React.createElement("div", { ref: artRef, className: "rounded-2xl overflow-hidden shadow-lg border bg-white max-w-md mx-auto", style: { borderColor: "#00000010", aspectRatio: "1 / 1" } },
-                React.createElement(ArtSvg, { product: product, template: template })),
-            React.createElement("div", { className: "flex flex-wrap gap-2 justify-center mt-4 max-w-md mx-auto" }, ART_TEMPLATES.map((t) => (React.createElement("button", { key: t.key, onClick: () => setTemplate(t.key), className: "px-3 py-1.5 rounded-full text-xs font-medium border", style: template === t.key ? { background: BRAND.ink, color: "#fff", borderColor: BRAND.ink } : { color: BRAND.ink, borderColor: "#00000015" } }, t.label)))),
+            React.createElement("div", { className: "rounded-2xl overflow-hidden shadow-lg border bg-white max-w-md mx-auto flex items-center justify-center", style: { borderColor: "#00000010", aspectRatio: currentFormat.ratio } },
+                artLoading && React.createElement("span", { className: "text-sm text-gray-400" }, "Gerando arte\u2026"),
+                !artLoading && artError && React.createElement("span", { className: "text-sm p-4 text-center", style: { color: BRAND.primary } }, artError),
+                !artLoading && !artError && artUrl && React.createElement("img", { src: artUrl, alt: "Arte gerada", className: "w-full h-full object-contain" })),
+            React.createElement("div", { className: "flex flex-wrap gap-2 justify-center mt-4 max-w-md mx-auto" }, ART_TEMPLATES.map((t) => (React.createElement("button", { key: t.key, onClick: () => setTemplate(t.key), className: "px-3 py-1.5 rounded-full text-xs font-medium border", style: template === t.key ? { background: BRAND.ink, color: "#fff", borderColor: BRAND.ink } : { color: BRAND.ink, borderColor: "#00000015" } },
+                t.emoji,
+                " ",
+                t.label)))),
+            React.createElement("div", { className: "flex flex-wrap gap-2 justify-center mt-2 max-w-md mx-auto" }, ART_FORMATS.map((f) => (React.createElement("button", { key: f.key, onClick: () => setFormat(f.key), className: "px-3 py-1.5 rounded-full text-xs font-medium border", style: format === f.key ? { background: BRAND.lime, color: BRAND.ink, borderColor: BRAND.lime } : { color: BRAND.ink, borderColor: "#00000015" } },
+                f.label,
+                " (",
+                f.dims,
+                ")")))),
             React.createElement("div", { className: "mt-4 max-w-md mx-auto bg-white rounded-xl border p-3", style: { borderColor: "#00000010" } },
                 React.createElement("p", { className: "text-xs font-semibold mb-2", style: { color: BRAND.ink } }, "Foto do produto"),
-                React.createElement("label", { className: "text-xs text-gray-500 block mb-1" }, "Link da imagem (a que a Shopee encontrou aparece aqui \u2014 pode colar outro)"),
-                React.createElement("input", { type: "text", value: isUploadedFile ? "" : currentImage, placeholder: "https://...", onChange: (e) => onUpdateProduct({ images: [e.target.value] }), className: "w-full mb-2 border rounded-lg px-2 py-1.5 text-xs", style: { borderColor: "#00000015", color: BRAND.ink } }),
+                React.createElement("label", { className: "text-xs text-gray-500 block mb-1" }, "Link de outra imagem (opcional \u2014 cole e clique em \"Usar\")"),
+                React.createElement("div", { className: "flex gap-2 mb-2" },
+                    React.createElement("input", { type: "text", value: manualPhotoInput, placeholder: "https://...", onChange: (e) => setManualPhotoInput(e.target.value), className: "flex-1 border rounded-lg px-2 py-1.5 text-xs", style: { borderColor: "#00000015", color: BRAND.ink } }),
+                    React.createElement("button", { onClick: onApplyManualPhotoUrl, className: "px-3 py-1.5 rounded-lg text-xs font-semibold border", style: { borderColor: "#00000015", color: BRAND.ink } }, "Usar")),
                 React.createElement("input", { ref: fileInputRef, type: "file", accept: "image/*", onChange: onPickPhoto, className: "hidden" }),
                 React.createElement("button", { onClick: () => { var _a; return (_a = fileInputRef.current) === null || _a === void 0 ? void 0 : _a.click(); }, className: "w-full flex items-center justify-center gap-1.5 text-xs font-semibold py-2 rounded-lg border", style: { borderColor: "#00000015", color: BRAND.ink } },
                     React.createElement("span", null, "\uD83D\uDDBC\uFE0F"),
-                    " ",
-                    isUploadedFile ? "Trocar por outro arquivo" : "Ou envie um arquivo do computador"),
-                React.createElement("p", { className: "text-[11px] text-gray-400 mt-2" }, "Dica: no site da Shopee, clique com o bot\u00E3o direito na foto do produto \u2192 \"Copiar endere\u00E7o da imagem\" \u2192 cole no campo acima."),
+                    " Ou envie um arquivo do computador"),
+                React.createElement("p", { className: "text-[11px] text-gray-400 mt-2" }, "A arte \u00E9 gerada no servidor com a foto j\u00E1 embutida \u2014 por isso o download/compartilhamento sempre traz a imagem certa."),
                 React.createElement("div", { className: "flex gap-2 mt-3" },
                     React.createElement("label", { className: "flex-1 text-xs text-gray-500" },
                         "Pre\u00E7o atual",
-                        React.createElement("input", { type: "number", step: "0.01", value: (_b = product.price) !== null && _b !== void 0 ? _b : "", placeholder: "0,00", onChange: (e) => onUpdateProduct({ price: e.target.value === "" ? null : Number(e.target.value) }), className: "w-full mt-1 border rounded-lg px-2 py-1.5 text-sm", style: { borderColor: "#00000015", color: BRAND.ink } })),
+                        React.createElement("input", { type: "number", step: "0.01", value: (_a = product.price) !== null && _a !== void 0 ? _a : "", placeholder: "0,00", onChange: (e) => onUpdateProduct({ price: e.target.value === "" ? null : Number(e.target.value) }), className: "w-full mt-1 border rounded-lg px-2 py-1.5 text-sm", style: { borderColor: "#00000015", color: BRAND.ink } })),
                     React.createElement("label", { className: "flex-1 text-xs text-gray-500" },
                         "Pre\u00E7o anterior (opcional)",
-                        React.createElement("input", { type: "number", step: "0.01", value: (_c = product.originalPrice) !== null && _c !== void 0 ? _c : "", placeholder: "0,00", onChange: (e) => onUpdateProduct({ originalPrice: e.target.value === "" ? null : Number(e.target.value) }), className: "w-full mt-1 border rounded-lg px-2 py-1.5 text-sm", style: { borderColor: "#00000015", color: BRAND.ink } })))),
+                        React.createElement("input", { type: "number", step: "0.01", value: (_b = product.originalPrice) !== null && _b !== void 0 ? _b : "", placeholder: "0,00", onChange: (e) => onUpdateProduct({ originalPrice: e.target.value === "" ? null : Number(e.target.value) }), className: "w-full mt-1 border rounded-lg px-2 py-1.5 text-sm", style: { borderColor: "#00000015", color: BRAND.ink } })))),
             React.createElement("div", { className: "flex gap-2 justify-center mt-4 max-w-md mx-auto" },
-                React.createElement("button", { onClick: onDownload, className: "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold text-white", style: { background: BRAND.primary } },
+                React.createElement("button", { onClick: onDownload, disabled: !artUrl, className: "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold text-white disabled:opacity-50", style: { background: BRAND.primary } },
                     React.createElement("span", null, "\u2B07\uFE0F"),
                     " Baixar imagem"))),
         React.createElement("div", { className: "max-w-md w-full mx-auto md:mx-0" },
             React.createElement("h2", { className: "text-2xl font-bold mb-1", style: { color: BRAND.ink, fontFamily: DISPLAY_FONT } }, "Seu an\u00FAncio est\u00E1 pronto!"),
-            React.createElement("p", { className: "text-sm text-gray-500 mb-4" }, product.title),
+            React.createElement("p", { className: "text-sm text-gray-500 mb-1" }, product.title),
+            (copy === null || copy === void 0 ? void 0 : copy.source) === "mock" && React.createElement("p", { className: "text-[11px] text-gray-400 mb-3" }, "Texto gerado por modelo local (sem IA configurada no servidor)."),
             React.createElement("div", { className: "flex flex-wrap gap-2 mb-3" }, TEXT_STYLES.map((s) => (React.createElement("button", { key: s.key, onClick: () => setStyle(s.key), className: "px-3 py-1.5 rounded-full text-xs font-medium border", style: style === s.key ? { background: BRAND.lime, color: BRAND.ink, borderColor: BRAND.lime } : { color: BRAND.ink, borderColor: "#00000015" } },
                 s.emoji,
                 " ",
                 s.label)))),
-            React.createElement("textarea", { value: text, onChange: (e) => setText(e.target.value), rows: 10, className: "w-full rounded-xl border p-4 text-sm outline-none bg-white resize-none", style: { borderColor: "#00000015", color: BRAND.ink } }),
+            (copy === null || copy === void 0 ? void 0 : copy.title) && (React.createElement("div", { className: "mb-3" },
+                React.createElement("p", { className: "text-xs text-gray-400 mb-1" }, "T\u00EDtulo curto"),
+                React.createElement("p", { className: "text-sm font-semibold", style: { color: BRAND.ink } }, copy.title))),
+            React.createElement("div", { className: "flex gap-1 mb-2" }, CAPTION_FIELDS.map((f) => (React.createElement("button", { key: f.key, onClick: () => setActiveCaptionKey(f.key), className: "px-3 py-1 rounded-full text-xs font-medium border", style: activeCaptionKey === f.key ? { background: BRAND.ink, color: "#fff", borderColor: BRAND.ink } : { color: BRAND.ink, borderColor: "#00000015" } }, f.label)))),
+            React.createElement("textarea", { value: text, onChange: (e) => setText(e.target.value), rows: 9, className: "w-full rounded-xl border p-4 text-sm outline-none bg-white resize-none", style: { borderColor: "#00000015", color: BRAND.ink } }),
             React.createElement("div", { className: "flex gap-2 mt-3" },
-                React.createElement("button", { onClick: onCopy, className: "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border flex-1 justify-center", style: { borderColor: "#00000015", color: BRAND.ink } },
-                    React.createElement("span", null, copied ? "✅" : "📋"),
+                React.createElement("button", { onClick: () => onCopyCaption(activeCaptionKey), className: "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border flex-1 justify-center", style: { borderColor: "#00000015", color: BRAND.ink } },
+                    React.createElement("span", null, copiedField === activeCaptionKey ? "✅" : "📋"),
                     " ",
-                    copied ? "Copiado!" : "Copiar texto"),
+                    copiedField === activeCaptionKey ? "Copiado!" : "Copiar legenda"),
                 React.createElement("button", { onClick: onRegenText, className: "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border flex-1 justify-center", style: { borderColor: "#00000015", color: BRAND.ink } },
                     React.createElement("span", null, "\uD83D\uDD04"),
-                    " Gerar novo texto")),
-            React.createElement("div", { className: "mt-5 p-3 rounded-xl bg-white border text-xs flex items-center gap-2", style: { borderColor: "#00000010" } },
+                    " Gerar outra vers\u00E3o")),
+            (copy === null || copy === void 0 ? void 0 : copy.cta) && React.createElement("p", { className: "text-xs text-gray-400 mt-2" },
+                "CTA sugerido: ",
+                React.createElement("span", { style: { color: BRAND.ink } }, copy.cta)),
+            affiliateWarning && (React.createElement("div", { className: "mt-4 p-3 rounded-xl text-xs", style: { background: "#FFF7E6", color: "#926A00", border: "1px solid #F5D98E" } },
+                "\u26A0\uFE0F ",
+                affiliateWarning)),
+            React.createElement("div", { className: "mt-3 p-3 rounded-xl bg-white border text-xs flex items-center gap-2", style: { borderColor: "#00000010" } },
                 React.createElement("span", { className: "text-gray-400 flex-shrink-0" }, "\uD83D\uDD17"),
                 React.createElement("span", { className: "truncate text-gray-500" }, affLink),
-                React.createElement("span", { className: "ml-auto text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-400 flex-shrink-0" }, "mock afiliado")),
-            React.createElement("button", { onClick: onPublish, className: "w-full mt-4 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-white", style: { background: BRAND.ink } },
+                React.createElement("span", { className: "ml-auto text-xs px-1.5 py-0.5 rounded flex-shrink-0", style: isAffiliate ? { background: "#dcfce7", color: "#16a34a" } : { background: "#fee2e2", color: "#b91c1c" } }, isAffiliate ? "afiliado" : "não confirmado")),
+            React.createElement("div", { className: "flex gap-2 mt-3" },
+                React.createElement("button", { onClick: onCopyLink, className: "flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border", style: { borderColor: "#00000015", color: BRAND.ink } },
+                    React.createElement("span", null, copiedField === "link" ? "✅" : "🔗"),
+                    " Copiar link"),
+                React.createElement("a", { href: `https://wa.me/?text=${encodeURIComponent((text || "") + "\n" + affLink)}`, target: "_blank", rel: "noreferrer", className: "flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-white", style: { background: "#25D366" } },
+                    React.createElement("span", null, "\uD83D\uDCAC"),
+                    " WhatsApp")),
+            React.createElement("button", { onClick: onPublish, className: "w-full mt-3 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-white", style: { background: BRAND.ink } },
                 React.createElement("span", null, "\uD83D\uDE80"),
                 " Publicar"),
             saveMsg && React.createElement("p", { className: "text-xs text-center mt-2 text-gray-400" }, saveMsg))));
@@ -300,15 +281,14 @@ function HistoryScreen({ items, onOpen }) {
     return (React.createElement("div", { className: "p-6 md:p-10", style: { background: BRAND.cream, minHeight: "100%" } },
         React.createElement("h2", { className: "text-xl font-bold mb-5", style: { color: BRAND.ink, fontFamily: DISPLAY_FONT } }, "Meus an\u00FAncios"),
         React.createElement("div", { className: "grid sm:grid-cols-2 lg:grid-cols-3 gap-4" }, items.map((it) => {
-            var _a, _b, _c, _d, _e, _f;
+            var _a, _b, _c;
             const styleLabel = ((_a = TEXT_STYLES.find((s) => s.key === it.style)) === null || _a === void 0 ? void 0 : _a.label) || it.style;
             const date = it.createdAt ? new Date(it.createdAt).toLocaleDateString("pt-BR") : "";
             const published = it.status === "publicado";
             return (React.createElement("div", { key: it.id, className: "bg-white rounded-2xl p-4 border", style: { borderColor: "#00000010" } },
-                React.createElement("div", { className: "text-4xl mb-2" }, (_d = (_c = (_b = it.product) === null || _b === void 0 ? void 0 : _b.images) === null || _c === void 0 ? void 0 : _c[0]) !== null && _d !== void 0 ? _d : "🛍️"),
-                React.createElement("p", { className: "text-sm font-semibold line-clamp-2", style: { color: BRAND.ink } }, (_e = it.product) === null || _e === void 0 ? void 0 : _e.title),
+                React.createElement("p", { className: "text-sm font-semibold line-clamp-2", style: { color: BRAND.ink } }, (_b = it.product) === null || _b === void 0 ? void 0 : _b.title),
                 React.createElement("div", { className: "flex items-center justify-between mt-2 text-xs text-gray-400" },
-                    React.createElement("span", null, money((_f = it.product) === null || _f === void 0 ? void 0 : _f.price)),
+                    React.createElement("span", null, money((_c = it.product) === null || _c === void 0 ? void 0 : _c.price)),
                     React.createElement("span", null, date)),
                 React.createElement("div", { className: "flex items-center gap-1.5 mt-2" },
                     React.createElement("span", { className: "text-xs px-2 py-0.5 rounded-full bg-black/5", style: { color: BRAND.ink } }, styleLabel),
@@ -347,17 +327,27 @@ function ShopeeAdsAI() {
     const [product, setProduct] = useState(null);
     const [adId, setAdId] = useState(null);
     const [style, setStyle] = useState("oferta");
-    const [template, setTemplate] = useState("oferta");
+    const [template, setTemplate] = useState("OFERTA");
+    const [format, setFormat] = useState("quadrado");
+    const [copy, setCopy] = useState(null);
+    const [activeCaptionKey, setActiveCaptionKey] = useState("whatsapp");
     const [text, setText] = useState("");
     const [affLink, setAffLink] = useState("");
-    const [copied, setCopied] = useState(false);
+    const [isAffiliate, setIsAffiliate] = useState(false);
+    const [affiliateWarning, setAffiliateWarning] = useState(null);
+    const [copiedField, setCopiedField] = useState(null);
     const [saveMsg, setSaveMsg] = useState("");
     const [showPublish, setShowPublish] = useState(false);
     const [platforms, setPlatforms] = useState([]);
     const [publishing, setPublishing] = useState(false);
     const [history, setHistory] = useState([]);
     const [stats, setStats] = useState(null);
-    const artRef = useRef(null);
+    const [manualPhotoInput, setManualPhotoInput] = useState("");
+    const [manualPhoto, setManualPhoto] = useState(null);
+    const [artUrl, setArtUrl] = useState(null);
+    const [artBlob, setArtBlob] = useState(null);
+    const [artLoading, setArtLoading] = useState(false);
+    const [artError, setArtError] = useState(null);
     const checkHealth = useCallback(() => {
         api.health().then(() => setOnline(true)).catch(() => setOnline(false));
     }, []);
@@ -372,22 +362,55 @@ function ShopeeAdsAI() {
         if (showPublish)
             api.platforms().then(setPlatforms).catch(() => setPlatforms([]));
     }, [showPublish]);
-    const runGeneration = useCallback(async (rawLink) => {
-        setScreen("loading");
-        setLoadStep(0);
-        const ticker = setInterval(() => setLoadStep((s) => (s < LOADING_STEPS.length - 1 ? s + 1 : s)), 450);
+    /** Chama o backend pra gerar a arte final (PNG real, foto já embutida) sempre que produto/template/formato/foto manual mudarem. */
+    const regenerateArt = useCallback(async (p, tmpl, fmt, manual) => {
+        if (!p)
+            return;
+        setArtLoading(true);
+        setArtError(null);
         try {
-            const { product: p, text: t, affiliateLink } = await api.generate(rawLink, style);
-            clearInterval(ticker);
-            setLoadStep(LOADING_STEPS.length);
-            setProduct(p);
-            setText(t);
-            setAffLink(affiliateLink);
-            setAdId(null);
-            setTimeout(() => setScreen("result"), 300);
+            const { blob } = await apiGenerateArt(p, tmpl, fmt, manual);
+            setArtBlob((prev) => { if (artUrl)
+                URL.revokeObjectURL(artUrl); return blob; });
+            setArtUrl(URL.createObjectURL(blob));
         }
         catch (err) {
-            clearInterval(ticker);
+            setArtError(err.message || "Erro ao gerar a arte.");
+        }
+        finally {
+            setArtLoading(false);
+        }
+    }, [artUrl]);
+    useEffect(() => {
+        if (screen === "result" && product) {
+            regenerateArt(product, template, format, manualPhoto);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [template, format, manualPhoto, product === null || product === void 0 ? void 0 : product.id, screen]);
+    const runGeneration = useCallback(async (rawLink) => {
+        var _a;
+        setScreen("loading");
+        setLoadStep(0);
+        try {
+            setLoadStep(1);
+            const data = await api.generate(rawLink, style);
+            setLoadStep(2);
+            setProduct(data.product);
+            setCopy(data.copy);
+            setText(((_a = data.copy) === null || _a === void 0 ? void 0 : _a.whatsapp) || data.text || "");
+            setActiveCaptionKey("whatsapp");
+            setAffLink(data.affiliateLink);
+            setIsAffiliate(Boolean(data.isAffiliate));
+            setAffiliateWarning(data.affiliateWarning || null);
+            setAdId(null);
+            setManualPhoto(null);
+            setManualPhotoInput("");
+            setLoadStep(3);
+            // a arte é gerada pelo useEffect acima assim que a tela "result" montar com o produto
+            setLoadStep(4);
+            setTimeout(() => setScreen("result"), 200);
+        }
+        catch (err) {
             setError(err.message || "Erro ao gerar o anúncio. Tente novamente.");
             setScreen("home");
         }
@@ -402,8 +425,9 @@ function ShopeeAdsAI() {
     };
     const onRegenText = async () => {
         try {
-            const { text: t } = await api.regenerateText(product, style);
-            setText(t);
+            const { copy: newCopy } = await api.regenerateText(product, style);
+            setCopy(newCopy);
+            setText(newCopy[activeCaptionKey] || newCopy.whatsapp);
         }
         catch (err) {
             setError(err.message);
@@ -412,79 +436,83 @@ function ShopeeAdsAI() {
     const changeStyle = async (key) => {
         setStyle(key);
         try {
-            const { text: t } = await api.regenerateText(product, key);
-            setText(t);
+            const { copy: newCopy } = await api.regenerateText(product, key);
+            setCopy(newCopy);
+            setText(newCopy[activeCaptionKey] || newCopy.whatsapp);
         }
         catch (err) {
             setError(err.message);
         }
     };
-    const onCopy = async () => {
+    const changeActiveCaption = (key) => {
+        var _a;
+        setActiveCaptionKey(key);
+        if (copy)
+            setText((_a = copy[key]) !== null && _a !== void 0 ? _a : copy.whatsapp);
+    };
+    const onCopyCaption = async (field) => {
         try {
             await navigator.clipboard.writeText(text);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
+            setCopiedField(field);
+            setTimeout(() => setCopiedField(null), 1500);
         }
         catch (_a) { }
     };
-    const renderArtToBlob = () => new Promise((resolve, reject) => {
-        var _a;
-        const svgEl = (_a = artRef.current) === null || _a === void 0 ? void 0 : _a.querySelector("svg");
-        if (!svgEl)
-            return reject(new Error("Não encontrei a arte pra exportar."));
-        const svgStr = new XMLSerializer().serializeToString(svgEl);
-        const svgBlob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" });
-        const url = URL.createObjectURL(svgBlob);
-        const img = new Image();
-        img.onload = () => {
-            const canvas = document.createElement("canvas");
-            canvas.width = 1080;
-            canvas.height = 1080;
-            const ctx = canvas.getContext("2d");
-            ctx.drawImage(img, 0, 0, 1080, 1080);
-            URL.revokeObjectURL(url);
-            canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Falha ao gerar a imagem."))), "image/png");
-        };
-        img.onerror = () => reject(new Error("Falha ao carregar a arte (a imagem do produto pode não ter carregado)."));
-        img.src = url;
-    });
-    const onDownload = async () => {
+    const onCopyLink = async () => {
         try {
-            const blob = await renderArtToBlob();
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = `anuncio-${product.id}.png`;
-            a.click();
+            await navigator.clipboard.writeText(affLink);
+            setCopiedField("link");
+            setTimeout(() => setCopiedField(null), 1500);
         }
-        catch (err) {
-            setSaveMsg(err.message);
-            setTimeout(() => setSaveMsg(""), 4000);
-        }
+        catch (_a) { }
     };
-    /** Abre o menu de compartilhar nativo do celular (Instagram, etc). No desktop, baixa a imagem e copia o texto. */
+    const onApplyManualPhotoUrl = () => {
+        if (manualPhotoInput.trim())
+            setManualPhoto(manualPhotoInput.trim());
+    };
+    const onPickPhoto = (e) => {
+        var _a;
+        const file = (_a = e.target.files) === null || _a === void 0 ? void 0 : _a[0];
+        if (!file)
+            return;
+        const reader = new FileReader();
+        reader.onload = () => setManualPhoto(reader.result);
+        reader.readAsDataURL(file);
+    };
+    const onDownload = () => {
+        if (!artBlob || !product)
+            return;
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(artBlob);
+        a.download = `anuncio-${product.id}-${format}.png`;
+        a.click();
+    };
+    /** Abre o menu de compartilhar nativo do celular (Instagram, etc). No desktop, baixa a imagem e copia a legenda. */
     const shareNative = async () => {
-        const blob = await renderArtToBlob();
-        const file = new File([blob], `anuncio-${product.id}.png`, { type: "image/png" });
+        if (!artBlob || !product)
+            return "Imagem ainda não está pronta.";
+        const file = new File([artBlob], `anuncio-${product.id}.png`, { type: "image/png" });
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
             await navigator.share({ files: [file], text });
             return "Compartilhado!";
         }
         const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
+        a.href = URL.createObjectURL(file);
         a.download = file.name;
         a.click();
         try {
             await navigator.clipboard.writeText(text);
         }
         catch (_a) { }
-        return "Imagem baixada e texto copiado — abra o Instagram e cole por lá.";
+        return "Imagem baixada e legenda copiada — abra o Instagram e cole por lá.";
     };
     const ensureSavedAd = async () => {
+        const adPayload = { productId: product.id, style, template, format, text, copy, affiliateLink: affLink, isAffiliate };
         if (adId) {
-            await api.updateAd(adId, { style, template, text, affiliateLink: affLink });
+            await api.updateAd(adId, adPayload);
             return adId;
         }
-        const ad = await api.saveAd({ productId: product.id, style, template, text, affiliateLink: affLink });
+        const ad = await api.saveAd(adPayload);
         setAdId(ad.id);
         return ad.id;
     };
@@ -515,19 +543,26 @@ function ShopeeAdsAI() {
     };
     const openFromHistory = (item) => {
         setProduct(item.product);
+        setCopy(item.copy || { whatsapp: item.text, instagram: item.text, alternative: item.text, source: "mock" });
         setText(item.text);
-        setTemplate(item.template || "oferta");
+        setActiveCaptionKey("whatsapp");
+        setTemplate(item.template || "OFERTA");
+        setFormat(item.format || "quadrado");
         setStyle(item.style || "oferta");
         setAffLink(item.affiliateLink || "");
+        setIsAffiliate(Boolean(item.isAffiliate));
+        setAffiliateWarning(null);
         setAdId(item.id);
+        setManualPhoto(null);
+        setManualPhotoInput("");
         setScreen("result");
     };
     const goHome = async () => {
         if (product && !adId) {
-            api.saveAd({ productId: product.id, style, template, text, affiliateLink: affLink }).then((ad) => setAdId(ad.id)).catch(() => { });
+            api.saveAd({ productId: product.id, style, template, format, text, copy, affiliateLink: affLink, isAffiliate }).then((ad) => setAdId(ad.id)).catch(() => { });
         }
         else if (product && adId) {
-            api.updateAd(adId, { style, template, text, affiliateLink: affLink }).catch(() => { });
+            api.updateAd(adId, { style, template, format, text, copy, affiliateLink: affLink, isAffiliate }).catch(() => { });
         }
         setLink("");
         setError("");
@@ -542,7 +577,7 @@ function ShopeeAdsAI() {
         React.createElement(ConnectionBanner, { online: online, onRetry: checkHealth }),
         screen === "home" && React.createElement(HomeScreen, { link: link, setLink: setLink, onGenerate: onGenerate, error: error }),
         screen === "loading" && React.createElement(LoadingScreen, { step: loadStep }),
-        screen === "result" && product && (React.createElement(ResultScreen, { product: product, onUpdateProduct: (fields) => setProduct((p) => ({ ...p, ...fields })), text: text, setText: setText, style: style, setStyle: changeStyle, template: template, setTemplate: setTemplate, onRegenText: onRegenText, artRef: artRef, onDownload: onDownload, onCopy: onCopy, copied: copied, onPublish: onPublish, affLink: affLink, saveMsg: saveMsg })),
+        screen === "result" && product && (React.createElement(ResultScreen, { product: product, onUpdateProduct: (fields) => setProduct((p) => ({ ...p, ...fields })), copy: copy, activeCaptionKey: activeCaptionKey, setActiveCaptionKey: changeActiveCaption, text: text, setText: setText, style: style, setStyle: changeStyle, template: template, setTemplate: setTemplate, format: format, setFormat: setFormat, onRegenText: onRegenText, artUrl: artUrl, artLoading: artLoading, artError: artError, onDownload: onDownload, onCopyCaption: onCopyCaption, copiedField: copiedField, onCopyLink: onCopyLink, onPublish: onPublish, affLink: affLink, isAffiliate: isAffiliate, affiliateWarning: affiliateWarning, saveMsg: saveMsg, manualPhotoInput: manualPhotoInput, setManualPhotoInput: setManualPhotoInput, onApplyManualPhotoUrl: onApplyManualPhotoUrl, onPickPhoto: onPickPhoto })),
         screen === "history" && React.createElement(HistoryScreen, { items: history, onOpen: openFromHistory }),
         screen === "dashboard" && React.createElement(DashboardScreen, { stats: stats }),
         showPublish && React.createElement(PublishModal, { onClose: () => setShowPublish(false), platforms: platforms, onSelect: onSelectPlatform, publishing: publishing })));

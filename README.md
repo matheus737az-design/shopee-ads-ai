@@ -1,25 +1,113 @@
-# Shopee Ads AI (v2 — scraping real de produto)
+# Shopee Ads AI
 
-App completo rodando localmente: backend em Node.js + Express, front em
-`public/index.html` (React já pré-compilado, sem build step nem Babel no
-navegador), servidos juntos no mesmo endereço.
+App que transforma o link de um produto da Shopee numa publicação pronta
+para redes sociais: texto persuasivo (título, legenda WhatsApp, legenda
+Instagram, CTA, versão alternativa) + arte promocional com a foto real do
+produto, em 3 formatos, com link de afiliado.
 
-## Novidade desta versão
+Backend em Node.js + Express. Frontend em `public/index.html` (React
+pré-compilado, sem build step nem Babel no navegador — servidos juntos no
+mesmo endereço, sem CORS).
 
-`productService.fetchProduct` agora tenta buscar o produto de verdade
-fazendo scraping da página pública da Shopee (título, imagem, descrição via
-tags Open Graph / JSON-LD; preço via heurística no HTML). **Isso é
-melhor-esforço**: a Shopee pode bloquear acessos automatizados, exigir
-captcha, ou mudar a estrutura da página a qualquer momento. Quando isso
-acontece, o backend devolve um erro claro (aparece na tela) em vez de fingir
-que funcionou.
+---
 
-O texto de IA e o link de afiliado **continuam mockados**.
+## Diagnóstico desta rodada (antes de mexer em qualquer coisa)
 
-## Como rodar
+O que já estava funcionando de verdade:
+- Busca de produto real via API oficial de afiliados da Shopee (GraphQL +
+  HMAC-SHA256), com scraping como reserva.
+- Histórico e dashboard (dados reais, em arquivos `.json`).
+- Compartilhamento real para WhatsApp/Telegram/Facebook.
+
+O que estava mockado:
+- Todo o texto gerado (`aiService.js` era 100% template fixo).
+- Link de afiliado (mock `?af_id=MOCK123` quando sem credenciais).
+
+**A causa raiz de "a imagem não aparece automaticamente"**: a arte era só um
+`<svg>` montado e renderizado **no navegador da pessoa**, que tentava
+carregar a foto do produto via um proxy de imagem restrito a domínios
+`shopee`/`susercontent`. Quando a foto não carregava (CDN bloqueando,
+domínio diferente, link manual colado de outro lugar), a arte ficava sem
+foto nenhuma e sem aviso — e em pelo menos um caso observado, a própria API
+de afiliados devolveu uma foto genérica de catálogo (não há nada a corrigir
+no código nesse caso específico: é limitação de dado da Shopee para aquele
+produto).
+
+## O que foi corrigido/implementado nesta rodada
+
+1. **Geração de arte agora é 100% no servidor** (`src/services/artRenderService.js`,
+   usando [Sharp](https://sharp.pixelplumbing.com/)). O backend monta a arte
+   (SVG com preço/título/desconto exatos, sem IA "desenhando" números) e
+   embute a foto real já nos bytes do PNG final, em memória (nenhum arquivo
+   fica salvo em disco). O frontend só exibe/baixa o PNG pronto — isso
+   elimina de vez o problema de "a foto não carrega depois", porque ela já
+   está dentro da imagem quando chega ao navegador.
+2. **3 formatos**: Stories (1080×1920), Feed vertical (1080×1350), Quadrado
+   (1080×1080) — selecionáveis antes/depois de gerar, sem precisar colar o
+   link de novo.
+3. **4 templates renomeados** conforme pedido: `OFERTA`, `ELEGANTE`,
+   `MODERNO`, `VIRAL`.
+4. **Busca de foto real com prioridade e fallback honesto**
+   (`src/services/imageService.js`): 1) imagem da API de afiliados → 2)
+   `og:image` da página pública do produto → 3) upload/link manual da
+   pessoa. Quando nenhuma das três funciona, a arte é desenhada **sem foto**,
+   com um aviso visual — nunca uma imagem genérica fingindo ser a do
+   produto.
+5. **Proteção SSRF real** (`src/services/ssrfGuard.js`): qualquer URL de
+   imagem (da API, da página, ou colada manualmente) tem o protocolo e o
+   IP resolvido validados antes de qualquer requisição, bloqueando
+   localhost/rede interna/metadados de nuvem — inclusive revalidando a
+   cada redirecionamento (contra DNS rebinding). `/api/image-proxy` deixou
+   de restringir por lista de domínios (o que quebrava a função de colar
+   foto manual de outro lugar) e passou a usar essa validação de verdade.
+6. **Textos completos** (`src/services/aiService.js`): título curto, legenda
+   WhatsApp, legenda Instagram, CTA e versão alternativa — nunca inventando
+   desconto/estoque/"menor preço do Brasil" além do que veio nos dados reais
+   do produto. Se `ANTHROPIC_API_KEY` estiver configurada, usa IA real
+   (Claude); sem ela, usa um gerador por template, sempre identificado como
+   tal (campo `source: "mock"` na resposta, mostrado também na tela).
+7. **Link de afiliado**: nunca mais sobrescrito silenciosamente. Se o link
+   colado já parecer de afiliado, é preservado; senão, tenta gerar um real
+   (com credenciais); sem credenciais, devolve o link original **com aviso
+   explícito** de que pode não gerar comissão.
+8. **Segurança/robustez do backend**: rate limiting (sem dependência
+   externa — `src/middleware/rateLimit.js`), limite de tamanho de
+   upload/JSON (12 MB), tratamento de erro global + 404 de API, timeouts em
+   todas as chamadas externas, CORS configurável via `ALLOWED_ORIGIN`.
+9. **Frontend atualizado** (`app-src.tsx`, compilado para `public/index.html`):
+   seletor de formato e template, preview da arte vinda do backend, campos
+   de legenda (WhatsApp/Instagram/Alternativa) com cópia individual, botão
+   de WhatsApp direto, botão de copiar link de afiliado, aviso de link não
+   confirmado como afiliado, loading com etapas reais (ligadas às respostas
+   de rede, não mais um timer simulado).
+10. Removido o arquivo `productService.js` duplicado que estava solto na raiz
+    do repositório (sobra de um upload anterior para a pasta errada do
+    GitHub) — o arquivo correto é só `src/services/productService.js`.
+
+## O que continua precisando de você / de credenciais externas
+
+- **Texto com IA real**: funciona assim que `ANTHROPIC_API_KEY` for
+  preenchida no Render. Sem ela, os textos continuam sendo gerados por
+  template (claramente identificado na tela, nunca passado como IA real).
+- **Produto/foto real via API oficial**: já implementado e, segundo seu
+  retorno anterior, já funcionou com suas credenciais (`SHOPEE_AFFILIATE_APP_ID`/
+  `SHOPEE_AFFILIATE_SECRET`). Quando a própria Shopee não tem foto real
+  cadastrada para um produto no catálogo de afiliados, nenhum código
+  resolve isso — use o upload manual ou o link de outra foto.
+- **Persistência de dados no Render free tier**: o disco do plano free
+  **não é permanente** — ele é recriado a cada deploy/restart, então
+  `data/*.json` (histórico, dashboard) pode ser perdido nesses momentos.
+  Isso não foi alterado nesta rodada porque corrigir de verdade exige um
+  banco externo (ex.: um Postgres gratuito no próprio Render, ou Supabase) —
+  decisão que vale conversarmos antes de eu trocar a camada de dados.
+- **Multi-afiliado (vender a ferramenta pra outras pessoas usarem o próprio
+  ID)**: segue como estava, fora do escopo desta rodada (conversa anterior
+  ficou em aberto).
+
+## Como rodar localmente
 
 ```bash
-cd backend
+cd shopee-ads-ai
 copy .env.example .env      # no Mac/Linux use: cp .env.example .env
 npm install
 npm run dev
@@ -27,84 +115,119 @@ npm run dev
 
 Abra **http://localhost:3333** numa aba normal do navegador.
 
-## Testando o scraping
+## Variáveis de ambiente (`.env`)
 
-Cole um link real de produto da Shopee (não um link de busca, tem que ser a
-página de um produto específico) e clique em "Gerar anúncio". Três cenários
-possíveis:
+| Variável | Obrigatória? | O que faz |
+|---|---|---|
+| `PORT` | não (padrão 3333) | porta do servidor — no Render é definida automaticamente, não mexa |
+| `DATA_DIR` | não (padrão `./data`) | pasta onde ficam os arquivos `.json` de histórico/dashboard |
+| `SHOPEE_AFFILIATE_APP_ID` / `SHOPEE_AFFILIATE_SECRET` | não | credenciais da API oficial de afiliados — sem elas, cai para scraping público e link original |
+| `ANTHROPIC_API_KEY` | não | ativa textos gerados por IA real — sem ela, usa gerador por template |
+| `ALLOWED_ORIGIN` | não | restringe CORS a um domínio específico; vazio = aceita qualquer origem |
 
-1. **Funcionou** — o título, imagem e preço batem com o produto real. 🎉
-2. **Erro claro na tela** (ex: "A Shopee bloqueou esta tentativa...") — a
-   proteção antibot da Shopee entrou em ação. Me avise qual mensagem
-   apareceu para ajustarmos.
-3. **Dados incompletos** (ex: preço não aparece, mas título e imagem sim) —
-   a heurística de preço não encontrou o padrão esperado nesse layout de
-   página. Também me avise para eu ajustar a extração.
+## Configuração no Render
 
-Se quiser voltar a usar dados mockados enquanto ajustamos o scraping, troque
-`fetchProduct` por `fetchProductMock` dentro de
-`src/routes/generate.js` e `src/routes/ads.js` temporariamente (ainda não
-temos uma variável de ambiente pra isso — é código, não configuração).
+1. **Build command**: `npm install`
+2. **Start command**: `npm start`
+3. Em "Environment", adicione as variáveis da tabela acima que você tiver
+   (todas são opcionais — o app funciona em modo mock sem nenhuma delas,
+   só com menos coisas reais).
+4. O servidor já usa `process.env.PORT` e faz bind em todas as interfaces
+   por padrão do Express — compatível com o Render sem ajuste nenhum.
+5. Nenhuma dependência de navegador headless (Playwright/Puppeteer) é usada
+   — só `fetch` nativo do Node e `sharp` (que instala binários próprios
+   automaticamente durante o `npm install`, sem precisar de nada extra no
+   Render).
 
 ## Estrutura
 
 ```
 public/
-  index.html            # front completo (React pré-compilado)
+  index.html               # frontend completo (React pré-compilado)
+app-src.tsx                # fonte editável do frontend (compile com tsc, ver abaixo)
 src/
-  server.js              # Express: serve a API em /api/* e o front estático
-  db/                     # armazenamento em arquivos .json
+  server.js                # Express: API em /api/* + frontend estático
+  middleware/
+    rateLimit.js            # rate limiting simples, sem dependência externa
+  db/                       # armazenamento em arquivos .json
   services/
-    productService.js    # SCRAPING real (novo) + mock + stub da API oficial
-    aiService.js         # MOCK — troque por chamada a um LLM real
-    affiliateService.js  # MOCK — troque pela API do programa de afiliados
-    publishService.js    # WhatsApp/Telegram/Facebook reais; IG/TikTok pendentes
+    productService.js       # API oficial de afiliados + scraping (reserva)
+    aiService.js             # textos completos — IA real (opcional) ou template
+    affiliateService.js      # preserva/gera/avisa sobre o link de afiliado
+    shopeeAffiliateClient.js # cliente HMAC-SHA256 compartilhado da API Shopee
+    imageService.js          # busca da foto real (API -> og:image -> manual), com SSRF guard
+    ssrfGuard.js              # validação de URL/IP contra SSRF
+    artRenderService.js       # composição da arte final em PNG (Sharp), 4 templates x 3 formatos
+    publishService.js         # WhatsApp/Telegram/Facebook reais; IG via navegador; TikTok pendente
   routes/
-    generate.js
+    generate.js               # /api/generate, /api/generate/text, /api/generate/art
     ads.js
     dashboard.js
+    imageProxy.js              # proxy de imagem para o frontend (com SSRF guard)
 ```
 
-## Sobre a API oficial de afiliados da Shopee
+### Editando o frontend
 
-Já implementado (`services/affiliateService.js`): quando `SHOPEE_AFFILIATE_APP_ID`
-e `SHOPEE_AFFILIATE_SECRET` estiverem preenchidos no `.env`, o backend gera
-links de afiliado de verdade via API oficial (GraphQL, autenticado com
-HMAC-SHA256). Sem essas credenciais, continua usando o mock.
+O HTML final (`public/index.html`) tem o React já compilado embutido. Para
+alterar a interface, edite `app-src.tsx` e recompile:
 
-Essas credenciais ficam disponíveis na seção "Open API" dentro do painel de
-afiliados (https://affiliate.shopee.com.br), depois de aprovado no programa.
+```bash
+npx tsc app-src.tsx --jsx react --target es2018 --lib dom,es2018,dom.iterable --outDir build --skipLibCheck
+```
 
-**Atenção:** eu não consegui testar essa integração contra a API real (sem
-acesso à internet no meu ambiente). Se a primeira chamada real der erro, me
-manda a mensagem exata que a API da Shopee devolver — ela costuma indicar
-qual campo está incorreto, e ajusto rapidinho.
+Isso gera `build/app-src.js` — copie o conteúdo para dentro da tag
+`<script>` em `public/index.html` (substituindo o script atual).
 
-Para busca de produto (`productService`), o scraping continua sendo o
-caminho ativo por enquanto — a mesma API de afiliados também expõe consultas
-de catálogo (`productOfferV2`), mas elas parecem funcionar por busca de
-palavra-chave, não por link direto de um produto específico. Vale
-investigar quando tivermos as credenciais reais em mãos para testar.
+## Testes realizados nesta rodada
+
+Como este ambiente não tem acesso à internet da Shopee (nem a nenhum site
+externo arbitrário), os testes abaixo foram feitos com o **servidor real
+rodando** (`node src/server.js`) e produtos de exemplo — não foi possível
+testar contra a Shopee ao vivo nem contra a API da Anthropic (sem chave
+configurada aqui). Tudo que segue foi de fato executado, não é só leitura
+de código:
+
+| Item do checklist | Resultado |
+|---|---|
+| Backend sobe sem erro (`npm run dev`) | ✅ testado |
+| `/api/health` responde | ✅ testado |
+| Validação de link inválido | ✅ testado (`400` com mensagem clara) |
+| Geração de arte nos 3 formatos | ✅ testado — PNG real conferido visualmente (1080×1080, 1080×1350, 1080×1920) |
+| Geração de arte nos 4 templates | ✅ testado — OFERTA, ELEGANTE, MODERNO, VIRAL, conferidos visualmente |
+| Upload manual de foto (base64) → aparece na arte | ✅ testado |
+| Produto sem foto nenhuma → desenha sem foto, não finge | ✅ testado |
+| Proteção SSRF (link apontando pra rede interna) | ✅ testado — bloqueado com erro claro, tanto no `/api/generate/art` quanto no `/api/image-proxy` |
+| Geração de texto (mock) nos 5 estilos | ✅ testado |
+| Salvar anúncio / editar / publicar (WhatsApp) | ✅ testado |
+| Publicar em plataforma indisponível (TikTok) | ✅ testado — erro claro, não finge sucesso |
+| Dashboard reflete dados reais salvos | ✅ testado |
+| Rate limiting | ✅ testado — `429` após o limite |
+| Integração real com a Shopee (produto/afiliado) | ⏳ não testável aqui — depende das suas credenciais reais e de acesso à internet da Shopee. Já funcionou antes segundo seu retorno; a lógica não mudou, só a foto/link ganharam mais fallback |
+| Integração real com IA (Anthropic) | ⏳ não testável aqui — sem `ANTHROPIC_API_KEY` configurada neste ambiente. O código está pronto; preencha a chave no Render e teste |
+| Compartilhamento nativo no celular (Instagram) | ⏳ depende de testar num celular de verdade — a lógica é a mesma de antes (Web Share API), só passou a usar o PNG que já vem pronto do servidor em vez de montado no navegador |
 
 ## Endpoints principais
 
-| Método | Rota                        | Descrição                                   |
-|--------|-----------------------------|----------------------------------------------|
-| POST   | /api/generate               | Gera produto + texto + link de afiliado      |
-| POST   | /api/generate/text          | Regenera só o texto com outro estilo         |
-| GET    | /api/ads                    | Lista o histórico ("Meus anúncios")          |
-| POST   | /api/ads                    | Salva um anúncio gerado                      |
-| PATCH  | /api/ads/:id                | Edita texto/estilo/template de um anúncio    |
-| GET    | /api/ads/publish/platforms  | Lista plataformas e quais já funcionam       |
-| POST   | /api/ads/:id/publish        | Registra publicação e devolve link de share  |
-| GET    | /api/dashboard              | Métricas reais (nada inventado)              |
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/health` | status do backend |
+| POST | `/api/generate` | busca produto real + gera texto + trata link de afiliado |
+| POST | `/api/generate/text` | regenera só o texto, com outro estilo |
+| POST | `/api/generate/art` | gera a arte final (PNG) — template, formato e foto manual opcional |
+| GET | `/api/ads` | histórico ("Meus anúncios") |
+| POST | `/api/ads` | salva um anúncio gerado |
+| PATCH | `/api/ads/:id` | edita um anúncio salvo |
+| GET | `/api/ads/publish/platforms` | lista plataformas e quais já funcionam |
+| POST | `/api/ads/:id/publish` | registra publicação e devolve link de compartilhamento |
+| GET | `/api/dashboard` | métricas reais (nada inventado) |
+| GET | `/api/image-proxy?url=` | busca uma imagem com proteção SSRF (usado pelo preview do frontend) |
 
-## Próximos passos
+## Próximos passos sugeridos
 
-1. Testar o scraping contra links reais e ajustar a extração conforme o que
-   a Shopee devolver de fato (isso eu não consigo simular no meu ambiente —
-   preciso do seu retorno).
-2. Trocar `aiService.generateCopy` por uma chamada a um provedor de IA real.
-3. Implementar `fetchProductViaApi` quando você tiver as credenciais do
-   programa de afiliados.
-4. Implementar `affiliateService` real.
+1. Preencher `ANTHROPIC_API_KEY` no Render para ativar textos com IA real.
+2. Testar o fluxo completo com um link real da Shopee (produto + foto +
+   link de afiliado) e me mandar o resultado — principalmente se a foto
+   real aparecer agora nos casos em que antes vinha genérica.
+3. Decidir sobre persistência de dados (manter como está, sabendo do risco
+   no plano free, ou migrar para um banco externo).
+4. Testar o compartilhamento nativo (Instagram) num celular de verdade.

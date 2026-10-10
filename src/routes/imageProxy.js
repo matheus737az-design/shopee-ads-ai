@@ -1,51 +1,36 @@
 import { Router } from "express";
+import { fetchImageSafely } from "../services/imageService.js";
 
 const router = Router();
 
 /**
- * GET /api/image-proxy?url=<imagem da Shopee>
+ * GET /api/image-proxy?url=<qualquer imagem http(s)>
  *
- * Busca a imagem no servidor (sem restrição de CORS, porque é o backend
- * quem faz a requisição, não o navegador) e devolve pela nossa própria
- * origem. Isso é necessário porque a imagem original da Shopee não libera
- * uso em <canvas> (o que impede baixar/compartilhar a arte final com a
- * foto real embutida).
+ * Usado pelo frontend para:
+ *  - mostrar no <canvas>/preview uma imagem de outro domínio sem problema de
+ *    CORS/"tainted canvas" (porque quem busca é o nosso servidor, não o navegador).
+ *  - a pessoa poder colar o link de QUALQUER imagem (não só da Shopee) na tela
+ *    de resultado e ver se funciona antes de gerar a arte final.
  *
- * Restrito a domínios da própria Shopee para não virar um proxy aberto.
+ * Antes isso era restrito a domínios "shopee"/"susercontent" — removido
+ * porque bloqueava a própria funcionalidade de colar uma foto manual de
+ * outro lugar. A segurança agora vem de fetchImageSafely (SSRF guard real:
+ * valida protocolo, resolve e bloqueia IP privado/interno, revalida cada
+ * redirecionamento, exige Content-Type image/* e limita tamanho) em vez de
+ * uma lista de domínios permitidos.
  */
 router.get("/", async (req, res) => {
   const { url } = req.query;
-  if (!url) return res.status(400).send("Parâmetro url ausente.");
-
-  let hostname;
-  try {
-    hostname = new URL(url).hostname.toLowerCase();
-  } catch {
-    return res.status(400).send("URL inválida.");
-  }
-  if (!hostname.includes("shopee") && !hostname.includes("susercontent")) {
-    return res.status(403).send("Domínio de imagem não permitido.");
-  }
+  if (!url || typeof url !== "string") return res.status(400).send("Parâmetro url ausente.");
 
   try {
-    const upstream = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        Referer: "https://shopee.com.br/",
-        Accept: "image/avif,image/webp,image/*,*/*",
-      },
-    });
-    if (!upstream.ok) {
-      console.warn(`[imageProxy] Shopee respondeu ${upstream.status} para ${url}`);
-      return res.status(502).send("Não foi possível buscar a imagem.");
-    }
-    res.setHeader("Content-Type", upstream.headers.get("content-type") || "image/jpeg");
+    const { buffer, contentType } = await fetchImageSafely(url);
+    res.setHeader("Content-Type", contentType || "image/jpeg");
     res.setHeader("Cache-Control", "public, max-age=86400");
-    const buf = Buffer.from(await upstream.arrayBuffer());
-    res.send(buf);
+    res.send(buffer);
   } catch (err) {
     console.warn("[imageProxy] Erro ao buscar imagem:", err.message);
-    res.status(502).send("Erro ao buscar imagem.");
+    res.status(502).send(err.message || "Erro ao buscar imagem.");
   }
 });
 

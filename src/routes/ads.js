@@ -11,9 +11,9 @@ router.get("/", (req, res) => {
 
 /** POST /api/ads — salva um anúncio gerado (vira "rascunho") */
 router.post("/", (req, res) => {
-  const { productId, style, template, text, affiliateLink } = req.body || {};
+  const { productId, style, template, format, text, copy, affiliateLink, isAffiliate } = req.body || {};
   if (!productId || !text) return res.status(400).json({ error: "Dados incompletos." });
-  const ad = createAd({ productId, style, template, text, affiliateLink });
+  const ad = createAd({ productId, style, template, format, text, copy, affiliateLink, isAffiliate });
   res.status(201).json(ad);
 });
 

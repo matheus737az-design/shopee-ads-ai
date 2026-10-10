@@ -2,7 +2,7 @@ import { nanoid } from "nanoid";
 import { readCollection, writeCollection } from "./jsonStore.js";
 import { getProductById } from "./productRepository.js";
 
-export function createAd({ productId, style, template, text, affiliateLink }) {
+export function createAd({ productId, style, template, format, text, copy, affiliateLink, isAffiliate }) {
   const ads = readCollection("ads");
   const now = new Date().toISOString();
   const ad = {
@@ -10,8 +10,11 @@ export function createAd({ productId, style, template, text, affiliateLink }) {
     productId,
     style,
     template,
+    format,
     text,
+    copy: copy || null,
     affiliateLink,
+    isAffiliate: Boolean(isAffiliate),
     status: "rascunho",
     createdAt: now,
     updatedAt: now,
