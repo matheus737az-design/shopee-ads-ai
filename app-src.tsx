@@ -230,7 +230,7 @@ function ResultScreen({
   product, onUpdateProduct, copy, activeCaptionKey, setActiveCaptionKey, text, setText,
   style, setStyle, template, setTemplate, format, setFormat, onRegenText,
   artUrl, artLoading, artError, onDownload, onCopyCaption, copiedField,
-  onCopyLink, onPublish, affLink, isAffiliate, affiliateWarning, saveMsg,
+  onCopyLink, onShareWhatsApp, onShareInstagram, onPublish, affLink, isAffiliate, affiliateWarning, saveMsg,
   manualPhotoInput, setManualPhotoInput, onApplyManualPhotoUrl, onPickPhoto,
 }: any) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -404,15 +404,26 @@ function ResultScreen({
           <button onClick={onCopyLink} className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border" style={{ borderColor: "#00000015", color: BRAND.ink }}>
             <span>{copiedField === "link" ? "✅" : "🔗"}</span> Copiar link
           </button>
-          <a
-            href={`https://wa.me/?text=${encodeURIComponent((text || "") + "\n" + affLink)}`}
-            target="_blank" rel="noreferrer"
-            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-white"
+          <button
+            onClick={onShareWhatsApp}
+            disabled={!artUrl}
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-white disabled:opacity-50"
             style={{ background: "#25D366" }}
           >
             <span>💬</span> WhatsApp
-          </a>
+          </button>
+          <button
+            onClick={onShareInstagram}
+            disabled={!artUrl}
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-white disabled:opacity-50"
+            style={{ background: "linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)" }}
+          >
+            <span>📸</span> Instagram
+          </button>
         </div>
+        <p className="text-[11px] text-gray-400 mt-1.5">
+          No celular, isso abre o menu de compartilhar do sistema já com a imagem e a legenda prontas — é só tocar no WhatsApp ou Instagram. No computador, a imagem é baixada e a legenda copiada automaticamente.
+        </p>
 
         <button onClick={onPublish} className="w-full mt-3 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-white" style={{ background: BRAND.ink }}>
           <span>🚀</span> Publicar
@@ -691,20 +702,42 @@ function ShopeeAdsAI() {
     a.click();
   };
 
-  /** Abre o menu de compartilhar nativo do celular (Instagram, etc). No desktop, baixa a imagem e copia a legenda. */
-  const shareNative = async () => {
+  /**
+   * Compartilha a arte JÁ GERADA (o PNG real, com a foto embutida) + a legenda
+   * juntos, usando o menu de compartilhar nativo do aparelho (Web Share API).
+   * É o único jeito confiável de entregar imagem + texto já prontos para o
+   * WhatsApp/Instagram — não existe link (wa.me, instagram.com/...) que
+   * anexe uma imagem automaticamente; por isso, no celular, isso abre o
+   * menu "Compartilhar" do sistema com a arte e a legenda prontas, e a
+   * pessoa só toca no ícone do WhatsApp ou do Instagram na lista. No
+   * computador (onde essa API não existe para arquivos), a imagem é
+   * baixada e a legenda copiada automaticamente, para anexar manualmente.
+   */
+  const shareNative = async (captionText: string) => {
     if (!artBlob || !product) return "Imagem ainda não está pronta.";
     const file = new File([artBlob], `anuncio-${product.id}.png`, { type: "image/png" });
     if ((navigator as any).canShare && (navigator as any).canShare({ files: [file] })) {
-      await (navigator as any).share({ files: [file], text });
+      await (navigator as any).share({ files: [file], text: captionText });
       return "Compartilhado!";
     }
     const a = document.createElement("a");
     a.href = URL.createObjectURL(file);
     a.download = file.name;
     a.click();
-    try { await navigator.clipboard.writeText(text); } catch {}
-    return "Imagem baixada e legenda copiada — abra o Instagram e cole por lá.";
+    try { await navigator.clipboard.writeText(captionText); } catch {}
+    return "Esse navegador não deixa anexar a imagem automaticamente: ela foi baixada e a legenda foi copiada — é só anexar a imagem na conversa e colar a legenda.";
+  };
+
+  const onShareWhatsApp = async () => {
+    const msg = await shareNative((text || "") + "\n" + affLink);
+    setSaveMsg(msg as string);
+    setTimeout(() => setSaveMsg(""), 5000);
+  };
+
+  const onShareInstagram = async () => {
+    const msg = await shareNative(text || "");
+    setSaveMsg(msg as string);
+    setTimeout(() => setSaveMsg(""), 5000);
   };
 
   const ensureSavedAd = async () => {
@@ -726,7 +759,10 @@ function ShopeeAdsAI() {
       const id = await ensureSavedAd();
       const { shareUrl } = await api.publish(id, platformKey);
       if (platformKey === "instagram") {
-        const msg = await shareNative();
+        const msg = await shareNative(text || "");
+        setSaveMsg(msg as string);
+      } else if (platformKey === "whatsapp") {
+        const msg = await shareNative((text || "") + "\n" + affLink);
         setSaveMsg(msg as string);
       } else {
         if (shareUrl) window.open(shareUrl, "_blank");
@@ -800,6 +836,8 @@ function ShopeeAdsAI() {
           onCopyCaption={onCopyCaption}
           copiedField={copiedField}
           onCopyLink={onCopyLink}
+          onShareWhatsApp={onShareWhatsApp}
+          onShareInstagram={onShareInstagram}
           onPublish={onPublish}
           affLink={affLink}
           isAffiliate={isAffiliate}
