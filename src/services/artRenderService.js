@@ -181,3 +181,13 @@ export async function renderArt({ product, photoBuffer, photoContentType, templa
   const png = await sharp(Buffer.from(svg)).png().toBuffer();
   return { buffer: png, width: format.width, height: format.height };
 }
+
+/**
+ * Mesma arte, mas em JPEG — formato exigido pela API de publicação do Instagram
+ * (só aceita JPEG). Fundo achatado em branco para não haver transparência.
+ */
+export async function renderArtJpeg(opts) {
+  const { buffer, width, height } = await renderArt(opts);
+  const jpeg = await sharp(buffer).flatten({ background: "#ffffff" }).jpeg({ quality: 90 }).toBuffer();
+  return { buffer: jpeg, width, height };
+}

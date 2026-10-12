@@ -104,6 +104,38 @@ produto).
   ID)**: segue como estava, fora do escopo desta rodada (conversa anterior
   ficou em aberto).
 
+## Publicação automática no Instagram
+
+O site agora pode buscar produtos em alta na Shopee, montar a arte + legenda com seu link de afiliado e publicar no Instagram pela **API oficial da Meta**, respeitando limites de quantidade.
+
+### Regras de quantidade (todas valem ao mesmo tempo)
+1. Máximo de posts em 24h (janela móvel) — padrão 3, teto fixo de 25.
+2. Intervalo mínimo entre posts — padrão 4h.
+3. Só posta dentro do horário permitido — padrão 8h às 22h (fuso de São Paulo).
+4. Antes de cada post consulta a **cota real da Meta** (`content_publishing_limit`); se não conseguir consultar, não posta.
+5. Nunca posta sem foto real do produto nem sem link de afiliado confirmado.
+6. Por padrão (`AUTOMATION_MODE=approval`) só sai o que você **aprovar** na aba Instagram. Para postar 100% sozinho, mude para `auto`.
+
+### O que você precisa configurar (uma vez)
+1. **Conta**: Instagram profissional (Comercial ou Criador), ligada a uma Página do Facebook (se usar Facebook Login).
+2. **App na Meta**: em developers.facebook.com crie um app, adicione o produto "Instagram" e as permissões `instagram_basic`, `instagram_content_publish` e `pages_read_engagement` (ou `instagram_business_basic` + `instagram_business_content_publish` com Instagram Login). Enquanto o app está em modo desenvolvimento, funciona para contas que são administradoras/testadoras do app.
+3. **Token de longa duração** e o **IG_USER_ID** (id numérico da conta profissional). Coloque em `IG_ACCESS_TOKEN` e `IG_USER_ID` no Render (Environment). **O token expira (~60 dias)** — quando o painel mostrar "Token expirado", gere outro e atualize.
+4. No Render, defina também `ADMIN_PASSWORD` (escolha uma senha forte), `CRON_SECRET` (um texto aleatório longo) e `PUBLIC_BASE_URL` (ex.: `https://shopee-ads-ai.onrender.com`).
+5. **Agendador**: o plano grátis do Render dorme sem visitas. Crie uma tarefa em cron-job.org que a cada 30 min faça `POST https://SEU-SITE.onrender.com/api/automation/tick` com o header `x-cron-secret: SEU_CRON_SECRET`. Cada chamada publica no máximo 1 post.
+
+### Limitações importantes
+- **Link na legenda do Instagram não é clicável.** A legenda avisa isso; coloque seu link de afiliado na bio.
+- **Render grátis apaga os arquivos** a cada deploy/restart: fila, ajustes salvos na tela e histórico de posts somem. A cota real da Meta continua sendo consultada, então o limite não é burlado, mas para guardar a fila é preciso um banco externo (não implementado).
+- A consulta de "produtos em alta" usa campos da API de afiliados da Shopee que **não foram confirmados com credenciais reais**; se a Shopee recusar, o erro aparece no painel e o log do servidor mostra os argumentos aceitos.
+- A integração com a Meta foi testada apenas com respostas simuladas; o primeiro post real deve ser feito manualmente pelo botão "Publicar agora" para conferir.
+- Publicar automaticamente em conta de afiliado deve seguir as regras da Shopee e da Meta (identificação de publicidade). Revise as políticas antes de ligar o modo `auto`.
+
+### Rotas (todas exigem `x-admin-password`, exceto `tick` com `x-cron-secret` e a imagem temporária)
+`GET /api/trending`, `GET /api/automation/status`, `PUT /api/automation/settings`, `POST /api/automation/tick`, `GET/POST /api/queue`, `PATCH /api/queue/:id`, `POST /api/queue/:id/approve|reject|publish`, `GET /api/queue/:id/preview`, `GET /api/public-image/:token.jpg`.
+
+### Testes
+`npm test` (Node 22+): regras de quantidade, publicação com Graph API simulada, autenticação.
+
 ## Como rodar localmente
 
 ```bash

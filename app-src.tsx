@@ -124,6 +124,7 @@ function NavBar({ screen, setScreen }: { screen: string; setScreen: (s: string) 
     { key: "home", label: "Novo anúncio", emoji: "✨" },
     { key: "history", label: "Meus anúncios", emoji: "🕘" },
     { key: "dashboard", label: "Dashboard", emoji: "📊" },
+    { key: "automation", label: "Instagram", emoji: "🤖" },
   ];
   return (
     <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: "#00000010" }}>
@@ -535,6 +536,270 @@ function DashboardScreen({ stats }: { stats: any }) {
   );
 }
 
+/* =========================================================================
+   AUTOMAÇÃO DO INSTAGRAM — em alta, fila e ajustes (protegido por senha)
+   ========================================================================= */
+function readPw(): string { try { return sessionStorage.getItem("adminPw") || ""; } catch (e) { return ""; } }
+function savePw(v: string) { try { if (v) sessionStorage.setItem("adminPw", v); else sessionStorage.removeItem("adminPw"); } catch (e) {} }
+
+async function adminFetch(path: string, options: any = {}, raw = false) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", "x-admin-password": readPw(), ...(options.headers || {}) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err: any = new Error(body.error || `Erro ${res.status}.`);
+    err.status = res.status;
+    throw err;
+  }
+  return raw ? res.blob() : res.json();
+}
+
+const STATUS_LABEL: any = {
+  pending: { t: "Aguardando aprovação", c: "#b45309", bg: "#fef3c7" },
+  approved: { t: "Aprovado — na fila", c: "#1d4ed8", bg: "#dbeafe" },
+  publishing: { t: "Publicando…", c: "#6d28d9", bg: "#ede9fe" },
+  published: { t: "Publicado ✓", c: "#15803d", bg: "#dcfce7" },
+  failed: { t: "Falhou", c: "#b91c1c", bg: "#fee2e2" },
+  rejected: { t: "Rejeitado", c: "#4b5563", bg: "#f3f4f6" },
+};
+
+function QueuePreview({ id }: { id: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true; let obj: string | null = null;
+    adminFetch(`/queue/${id}/preview`, {}, true).then((b: any) => { if (alive) { obj = URL.createObjectURL(b); setUrl(obj); } }).catch(() => {});
+    return () => { alive = false; if (obj) URL.revokeObjectURL(obj); };
+  }, [id]);
+  return url ? <img src={url} alt="Prévia da arte" className="w-full rounded-xl border" /> : <div className="w-full aspect-[4/5] rounded-xl bg-black/5 flex items-center justify-center text-xs text-gray-400">Carregando prévia…</div>;
+}
+
+function QueueCard({ item, onChange, busy, setBusy }: any) {
+  const [caption, setCaption] = useState(item.caption);
+  const [msg, setMsg] = useState("");
+  useEffect(() => setCaption(item.caption), [item.caption]);
+  const st = STATUS_LABEL[item.status] || STATUS_LABEL.pending;
+  const editable = !["publishing", "published"].includes(item.status);
+  const run = async (fn: () => Promise<any>, okMsg = "") => {
+    setBusy(true); setMsg("");
+    try { await fn(); setMsg(okMsg); } catch (e: any) { setMsg(e.message); }
+    setBusy(false); onChange();
+  };
+  const post = (p: string) => adminFetch(p, { method: "POST" });
+  return (
+    <div className="bg-white rounded-2xl border p-4 grid md:grid-cols-[220px_1fr] gap-4" style={{ borderColor: "#00000010" }}>
+      <QueuePreview id={item.id} />
+      <div>
+        <div className="flex items-center gap-2 flex-wrap mb-1">
+          <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ color: st.c, background: st.bg }}>{st.t}</span>
+          <span className="text-xs text-gray-400">{item.source === "trending" ? "Automático (em alta)" : "Manual"}</span>
+        </div>
+        <div className="font-semibold text-sm mb-2" style={{ color: BRAND.ink }}>{item.product.title}</div>
+        <textarea value={caption} onChange={(e: any) => setCaption(e.target.value)} disabled={!editable} rows={7}
+          className="w-full text-sm border rounded-xl p-2" style={{ borderColor: "#00000020" }} />
+        {item.error && <p className="text-xs mt-1" style={{ color: "#b91c1c" }}>⚠ {item.error}</p>}
+        {item.permalink && <a href={item.permalink} target="_blank" rel="noreferrer" className="text-xs underline" style={{ color: BRAND.primary }}>Ver no Instagram</a>}
+        {msg && <p className="text-xs mt-1 text-gray-600">{msg}</p>}
+        <div className="flex gap-2 flex-wrap mt-3">
+          {editable && caption !== item.caption && (
+            <button disabled={busy} className="px-3 py-1.5 rounded-lg text-sm border" onClick={() => run(() => adminFetch(`/queue/${item.id}`, { method: "PATCH", body: JSON.stringify({ caption }) }), "Legenda salva.")}>Salvar legenda</button>
+          )}
+          {["pending", "rejected", "failed"].includes(item.status) && (
+            <button disabled={busy} className="px-3 py-1.5 rounded-lg text-sm text-white" style={{ background: BRAND.primary }} onClick={() => run(() => post(`/queue/${item.id}/approve`), "Aprovado.")}>Aprovar</button>
+          )}
+          {["approved", "failed", "pending"].includes(item.status) && (
+            <button disabled={busy} className="px-3 py-1.5 rounded-lg text-sm border" onClick={() => { if (confirm("Publicar este post no Instagram agora?")) run(() => post(`/queue/${item.id}/publish`), "Publicado!"); }}>Publicar agora</button>
+          )}
+          {["pending", "approved", "failed"].includes(item.status) && (
+            <button disabled={busy} className="px-3 py-1.5 rounded-lg text-sm border" onClick={() => run(() => post(`/queue/${item.id}/reject`), "Rejeitado.")}>Rejeitar</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TrendingTab({ onQueued }: any) {
+  const [items, setItems] = useState<any[] | null>(null);
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState<string | null>(null);
+  const [done, setDone] = useState<any>({});
+  const load = async () => {
+    setLoading(true); setErr("");
+    try { setItems((await adminFetch("/trending?limit=20")).items); } catch (e: any) { setErr(e.message); }
+    setLoading(false);
+  };
+  const send = async (p: any) => {
+    setSending(p.id); setErr("");
+    try { await adminFetch("/queue", { method: "POST", body: JSON.stringify({ url: p.url }) }); setDone((d: any) => ({ ...d, [p.id]: true })); onQueued(); }
+    catch (e: any) { setErr(e.message); }
+    setSending(null);
+  };
+  return (
+    <div>
+      <button onClick={load} disabled={loading} className="px-4 py-2 rounded-xl text-white text-sm font-semibold" style={{ background: BRAND.primary }}>
+        {loading ? "Buscando…" : items ? "Atualizar lista" : "Buscar produtos em alta"}
+      </button>
+      {err && <p className="text-sm mt-3" style={{ color: "#b91c1c" }}>⚠ {err}</p>}
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+        {(items || []).map((p: any) => (
+          <div key={p.id} className="bg-white rounded-2xl border p-3 flex gap-3" style={{ borderColor: "#00000010" }}>
+            {p.images && p.images[0] && <img src={p.images[0]} alt="" className="w-20 h-20 rounded-lg object-cover bg-black/5" />}
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold line-clamp-2" style={{ color: BRAND.ink }}>{p.title}</div>
+              <div className="text-sm font-bold" style={{ color: BRAND.primary }}>{money(p.price)}</div>
+              <div className="text-xs text-gray-500">{p.sales != null ? `${p.sales} vendas` : ""} {p.commissionRate != null ? `· comissão ${(p.commissionRate * 100).toFixed(0)}%` : ""}</div>
+              <button disabled={sending === p.id || done[p.id]} onClick={() => send(p)} className="mt-1 px-3 py-1 rounded-lg text-xs border">
+                {done[p.id] ? "Na fila ✓" : sending === p.id ? "Preparando…" : "Enviar para a fila"}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {items && items.length === 0 && <p className="text-sm text-gray-500 mt-4">Nenhum produto retornado.</p>}
+    </div>
+  );
+}
+
+function SettingsTab({ status, reload }: any) {
+  const [s, setS] = useState<any>(status.settings);
+  const [msg, setMsg] = useState("");
+  const set = (k: string, v: any) => setS((o: any) => ({ ...o, [k]: v }));
+  const num = (k: string, label: string, help: string) => (
+    <label className="block text-sm"><span className="font-semibold" style={{ color: BRAND.ink }}>{label}</span>
+      <input type="number" value={s[k]} onChange={(e: any) => set(k, Number(e.target.value))} className="block border rounded-lg p-2 mt-1 w-28" style={{ borderColor: "#00000020" }} />
+      <span className="text-xs text-gray-500">{help}</span></label>
+  );
+  const save = async () => {
+    setMsg("");
+    try { await adminFetch("/automation/settings", { method: "PUT", body: JSON.stringify(s) }); setMsg("Salvo."); reload(); } catch (e: any) { setMsg(e.message); }
+  };
+  return (
+    <div className="bg-white rounded-2xl border p-5 grid gap-4 max-w-xl" style={{ borderColor: "#00000010" }}>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" checked={s.mode === "auto"} onChange={(e: any) => set("mode", e.target.checked ? "auto" : "approval")} className="mt-1" />
+        <span><b>Publicar sem pedir aprovação</b><br /><span className="text-xs text-gray-500">Desligado (recomendado): só sai o que você aprovar.</span></span>
+      </label>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" checked={s.autoFill} onChange={(e: any) => set("autoFill", e.target.checked)} className="mt-1" />
+        <span><b>Buscar produtos em alta sozinho</b><br /><span className="text-xs text-gray-500">Mantém a fila abastecida usando a lista de mais vendidos.</span></span>
+      </label>
+      {num("maxPostsPerDay", "Máximo de posts em 24h", `Teto de segurança: 25. A Meta permite bem mais, mas postar demais prejudica o alcance.`)}
+      {num("minHoursBetweenPosts", "Horas entre um post e outro", "Evita postar tudo de uma vez.")}
+      {num("windowStartHour", "Postar a partir das (hora)", `Fuso: ${s.timeZone}`)}
+      {num("windowEndHour", "Postar até as (hora)", "Depois disso espera o dia seguinte.")}
+      {num("queueTarget", "Itens na fila (automático)", "Quantos itens esperando antes de buscar novos.")}
+      {num("dedupeDays", "Não repetir produto por (dias)", "")}
+      <div className="flex items-center gap-3"><button onClick={save} className="px-4 py-2 rounded-xl text-white text-sm font-semibold" style={{ background: BRAND.primary }}>Salvar ajustes</button><span className="text-sm text-gray-600">{msg}</span></div>
+      <p className="text-xs text-gray-500">No plano grátis do Render, ajustes salvos aqui voltam ao padrão quando o servidor reinicia. Para fixar, use as variáveis de ambiente (veja o README).</p>
+    </div>
+  );
+}
+
+function AutomationScreen() {
+  const [pw, setPw] = useState(readPw());
+  const [input, setInput] = useState("");
+  const [authed, setAuthed] = useState(false);
+  const [authErr, setAuthErr] = useState("");
+  const [tab, setTab] = useState("queue");
+  const [status, setStatus] = useState<any>(null);
+  const [queue, setQueue] = useState<any[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [tickMsg, setTickMsg] = useState("");
+  const [newUrl, setNewUrl] = useState("");
+
+  const reload = async () => {
+    try {
+      const [st, q] = await Promise.all([adminFetch("/automation/status"), adminFetch("/queue")]);
+      setStatus(st); setQueue(q.items); setAuthed(true); setErr("");
+    } catch (e: any) {
+      if (e.status === 401 || e.status === 503) { setAuthed(false); setAuthErr(e.message); savePw(""); } else setErr(e.message);
+    }
+  };
+  useEffect(() => { if (pw) reload(); }, []);
+  const login = () => { savePw(input); setPw(input); setAuthErr(""); setTimeout(reload, 0); };
+
+  if (!authed) {
+    return (
+      <div className="p-6 md:p-10 max-w-md" style={{ background: BRAND.cream }}>
+        <h2 className="text-xl font-bold mb-2" style={{ color: BRAND.ink, fontFamily: DISPLAY_FONT }}>Automação do Instagram</h2>
+        <p className="text-sm text-gray-600 mb-3">Área protegida. Digite a senha definida em ADMIN_PASSWORD no Render.</p>
+        <input type="password" value={input} onChange={(e: any) => setInput(e.target.value)} onKeyDown={(e: any) => e.key === "Enter" && login()} placeholder="Senha" className="border rounded-xl p-2 w-full" style={{ borderColor: "#00000020" }} />
+        <button onClick={login} className="mt-3 px-4 py-2 rounded-xl text-white text-sm font-semibold" style={{ background: BRAND.primary }}>Entrar</button>
+        {authErr && <p className="text-sm mt-3" style={{ color: "#b91c1c" }}>{authErr}</p>}
+      </div>
+    );
+  }
+
+  const ig = status?.instagram;
+  const addUrl = async () => {
+    setBusy(true); setErr("");
+    try { await adminFetch("/queue", { method: "POST", body: JSON.stringify({ url: newUrl }) }); setNewUrl(""); await reload(); } catch (e: any) { setErr(e.message); }
+    setBusy(false);
+  };
+  const tickNow = async () => {
+    setBusy(true); setTickMsg("");
+    try { const r = await adminFetch("/automation/tick", { method: "POST" }); setTickMsg(r.actions.join(" • ")); } catch (e: any) { setTickMsg(e.message); }
+    setBusy(false); reload();
+  };
+  const tabs = [{ k: "queue", l: "Fila" }, { k: "trending", l: "Em alta" }, { k: "settings", l: "Ajustes" }];
+  return (
+    <div className="p-6 md:p-10" style={{ background: BRAND.cream, minHeight: "100%" }}>
+      <h2 className="text-xl font-bold mb-4" style={{ color: BRAND.ink, fontFamily: DISPLAY_FONT }}>Automação do Instagram</h2>
+      {status && (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-5 text-sm">
+          <div className="bg-white rounded-2xl border p-3" style={{ borderColor: "#00000010" }}>
+            <div className="text-xs text-gray-500">Instagram</div>
+            <div className="font-semibold">{!ig.configured ? "Não configurado" : ig.error ? "Erro de conexão" : `@${ig.username || "?"}`}</div>
+            {ig.error && <div className="text-xs" style={{ color: "#b91c1c" }}>{ig.error}</div>}
+            {ig.quota && ig.quota.total != null && <div className="text-xs text-gray-500">Cota da Meta: {ig.quota.used}/{ig.quota.total} em 24h</div>}
+          </div>
+          <div className="bg-white rounded-2xl border p-3" style={{ borderColor: "#00000010" }}>
+            <div className="text-xs text-gray-500">Posts nas últimas 24h</div>
+            <div className="font-semibold">{status.publishedLast24h} de {status.settings.maxPostsPerDay} permitidos</div>
+          </div>
+          <div className="bg-white rounded-2xl border p-3" style={{ borderColor: "#00000010" }}>
+            <div className="text-xs text-gray-500">Pode postar agora?</div>
+            <div className="font-semibold">{status.canPublishNow ? "Sim" : "Não"}</div>
+            {!status.canPublishNow && <div className="text-xs text-gray-500">{status.blockedReason}{status.nextEligibleAt ? ` Próximo: ${new Date(status.nextEligibleAt).toLocaleString("pt-BR")}` : ""}</div>}
+          </div>
+          <div className="bg-white rounded-2xl border p-3" style={{ borderColor: "#00000010" }}>
+            <div className="text-xs text-gray-500">Modo</div>
+            <div className="font-semibold">{status.settings.mode === "auto" ? "Automático total" : "Com aprovação"}{status.settings.autoFill ? " + busca sozinho" : ""}</div>
+          </div>
+        </div>
+      )}
+      <div className="flex gap-2 mb-4 flex-wrap items-center">
+        {tabs.map((t) => (
+          <button key={t.k} onClick={() => setTab(t.k)} className="px-4 py-1.5 rounded-full text-sm font-medium"
+            style={tab === t.k ? { background: BRAND.ink, color: "#fff" } : { background: "#00000008", color: BRAND.ink }}>{t.l}</button>
+        ))}
+        <button onClick={tickNow} disabled={busy} className="ml-auto px-3 py-1.5 rounded-lg text-sm border">Rodar agora (publica o próximo aprovado, se as regras permitirem)</button>
+      </div>
+      {tickMsg && <p className="text-sm mb-3 text-gray-700">{tickMsg}</p>}
+      {err && <p className="text-sm mb-3" style={{ color: "#b91c1c" }}>⚠ {err}</p>}
+
+      {tab === "queue" && (
+        <div>
+          <div className="flex gap-2 mb-4">
+            <input value={newUrl} onChange={(e: any) => setNewUrl(e.target.value)} placeholder="Colar link de um produto da Shopee para a fila" className="flex-1 border rounded-xl p-2 text-sm" style={{ borderColor: "#00000020" }} />
+            <button onClick={addUrl} disabled={busy || !newUrl} className="px-4 py-2 rounded-xl text-white text-sm font-semibold" style={{ background: BRAND.primary }}>{busy ? "…" : "Adicionar"}</button>
+          </div>
+          <div className="grid gap-4">
+            {queue.length === 0 && <p className="text-sm text-gray-500">A fila está vazia. Use “Em alta” ou cole um link acima.</p>}
+            {queue.map((it: any) => <QueueCard key={it.id} item={it} onChange={reload} busy={busy} setBusy={setBusy} />)}
+          </div>
+        </div>
+      )}
+      {tab === "trending" && <TrendingTab onQueued={reload} />}
+      {tab === "settings" && status && <SettingsTab status={status} reload={reload} />}
+    </div>
+  );
+}
+
 function ShopeeAdsAI() {
   const [screen, setScreen] = useState("home");
   const [online, setOnline] = useState<boolean | null>(null);
@@ -851,6 +1116,7 @@ function ShopeeAdsAI() {
       )}
       {screen === "history" && <HistoryScreen items={history} onOpen={openFromHistory} />}
       {screen === "dashboard" && <DashboardScreen stats={stats} />}
+      {screen === "automation" && <AutomationScreen />}
       {showPublish && <PublishModal onClose={() => setShowPublish(false)} platforms={platforms} onSelect={onSelectPlatform} publishing={publishing} />}
     </div>
   );

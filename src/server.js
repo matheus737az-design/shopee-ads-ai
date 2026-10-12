@@ -10,8 +10,12 @@ import generateRoutes from "./routes/generate.js";
 import adsRoutes from "./routes/ads.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import imageProxyRoutes from "./routes/imageProxy.js";
+import automationRoutes, { publicImageRouter } from "./routes/automation.js";
 
 const app = express();
+
+// Atrás do proxy do Render: necessário para req.ip/req.protocol corretos.
+app.set("trust proxy", 1);
 
 // Permite que uma página aberta em outro domínio (ex: claude.ai) chame esta
 // API rodando em localhost — necessário por causa do "Private Network Access"
@@ -39,6 +43,8 @@ app.use("/api/generate", generateRoutes);
 app.use("/api/ads", adsRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/image-proxy", imageProxyRoutes);
+app.use("/api/public-image", publicImageRouter);
+app.use("/api", automationRoutes);
 
 // Frontend estático — abra http://localhost:3333 no navegador para usar o app
 app.use(express.static(path.join(__dirname, "..", "public")));

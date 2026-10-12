@@ -125,7 +125,7 @@ function generateCopyWithTemplate(product, styleKey) {
     oferta: {
       whatsapp: `🔥 ${title}\n${priceLine}\n👉 Confira o link!`,
       instagram: `🔥 OLHA ESSA OFERTA!\n\n${title}\n\n${feats}\n\n${priceLine}\n\n👉 Link na bio/comentário!`,
-      cta: "Garanta o seu antes que acabe",
+      cta: "Garanta o seu",
       alternative: `Separei esse achado pra você: ${title}. ${priceLine}. Vale a pena dar uma olhada!`,
     },
     beneficio: {

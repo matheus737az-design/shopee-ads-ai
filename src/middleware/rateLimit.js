@@ -5,7 +5,7 @@
  *
  * Limita por IP + rota, numa janela deslizante simples.
  */
-function makeLimiter({ windowMs, limit, message }) {
+export function makeLimiter({ windowMs, limit, message }) {
   const hits = new Map(); // ip -> [timestamps]
 
   // limpeza periódica para não acumular memória indefinidamente
@@ -41,4 +41,17 @@ export const artLimiter = makeLimiter({
   windowMs: 60 * 1000,
   limit: 20,
   message: "Muitas gerações de arte em pouco tempo. Aguarde um minuto e tente de novo.",
+});
+
+export const trendingLimiter = makeLimiter({
+  windowMs: 60 * 1000,
+  limit: 6,
+  message: "Muitas consultas de produtos em alta. Aguarde um minuto.",
+});
+
+// Senha errada várias vezes seguidas -> bloqueia o IP por um tempo (anti força-bruta).
+export const adminFailLimiter = makeLimiter({
+  windowMs: 10 * 60 * 1000,
+  limit: 10,
+  message: "Muitas tentativas de senha. Aguarde alguns minutos.",
 });

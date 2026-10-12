@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "node src/server.js",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "test": "node --experimental-test-module-mocks --test tests/*.test.js"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
