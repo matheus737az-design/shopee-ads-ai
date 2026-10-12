@@ -11,6 +11,7 @@ import adsRoutes from "./routes/ads.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import imageProxyRoutes from "./routes/imageProxy.js";
 import automationRoutes, { publicImageRouter } from "./routes/automation.js";
+import { startScheduler } from "./services/scheduler.js";
 
 const app = express();
 
@@ -64,4 +65,5 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`Shopee Ads AI rodando em http://localhost:${PORT}`);
+  startScheduler();
 });

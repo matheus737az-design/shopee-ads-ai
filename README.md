@@ -104,37 +104,77 @@ produto).
   ID)**: segue como estava, fora do escopo desta rodada (conversa anterior
   ficou em aberto).
 
-## Publicação automática no Instagram
+## Publicação automática no Instagram (piloto automático)
 
-O site agora pode buscar produtos em alta na Shopee, montar a arte + legenda com seu link de afiliado e publicar no Instagram pela **API oficial da Meta**, respeitando limites de quantidade.
+Depois de configurado, o sistema funciona sozinho: escolhe produtos em alta na
+Shopee, gera a arte e a legenda com o seu link de afiliado e publica no
+Instagram pela **API oficial da Meta**, respeitando limites de quantidade.
+Você não precisa aprovar nada (modo `auto`) nem manter nenhum serviço externo.
+
+### Como funciona
+- **Agendador interno** (`src/services/scheduler.js`): roda um ciclo a cada
+  20 min dentro do próprio servidor e mantém o Render grátis acordado
+  (um serviço sempre ligado usa ~744h/mês, dentro das 750h grátis).
+- **Histórico vem do próprio Instagram** (`src/services/igHistory.js`): o
+  limite diário, o intervalo entre posts e o "não repetir produto" são
+  calculados a partir dos posts reais da conta. Por isso continuam valendo
+  mesmo quando o Render apaga os arquivos (deploy/reinício). Cada legenda leva
+  um `Cód. <id do produto>` que permite reconhecer o que já foi postado.
+- **Modo auto econômico**: cada ciclo primeiro confere se pode postar agora;
+  só então busca produto, gera texto/arte e publica. Fora do horário ou no
+  limite, não gasta chamadas de Shopee/IA.
+- **Token que não expira**: com token do *Instagram Login*, o servidor o renova
+  a cada 7 dias. Se `RENDER_API_KEY` estiver configurada, grava o token novo
+  no Render e faz redeploy sozinho.
+- **Alarme**: o workflow `.github/workflows/alarme.yml` consulta
+  `/api/automation/heartbeat` a cada 2h. Se houver problema (token inválido,
+  erro repetido), o workflow falha e **o GitHub te manda e-mail**.
+- **Autodiagnóstico**: ao subir, o servidor escreve no log do Render se a
+  Shopee e o Instagram estão respondendo.
 
 ### Regras de quantidade (todas valem ao mesmo tempo)
 1. Máximo de posts em 24h (janela móvel) — padrão 3, teto fixo de 25.
 2. Intervalo mínimo entre posts — padrão 4h.
-3. Só posta dentro do horário permitido — padrão 8h às 22h (fuso de São Paulo).
-4. Antes de cada post consulta a **cota real da Meta** (`content_publishing_limit`); se não conseguir consultar, não posta.
-5. Nunca posta sem foto real do produto nem sem link de afiliado confirmado.
-6. Por padrão (`AUTOMATION_MODE=approval`) só sai o que você **aprovar** na aba Instagram. Para postar 100% sozinho, mude para `auto`.
+3. Só posta dentro do horário permitido — padrão 8h às 22h (São Paulo).
+4. Antes de cada post consulta a **cota real da Meta**; se não conseguir, não posta.
+5. Se não conseguir ler os posts recentes da conta, não posta (falha segura).
+6. Nunca posta sem foto real do produto nem sem link de afiliado confirmado.
+7. Não repete o mesmo produto por `AUTOMATION_DEDUPE_DAYS` (padrão 30 dias).
+8. Toda legenda leva `#publi` (identificação de publicidade).
 
-### O que você precisa configurar (uma vez)
-1. **Conta**: Instagram profissional (Comercial ou Criador), ligada a uma Página do Facebook (se usar Facebook Login).
-2. **App na Meta**: em developers.facebook.com crie um app, adicione o produto "Instagram" e as permissões `instagram_basic`, `instagram_content_publish` e `pages_read_engagement` (ou `instagram_business_basic` + `instagram_business_content_publish` com Instagram Login). Enquanto o app está em modo desenvolvimento, funciona para contas que são administradoras/testadoras do app.
-3. **Token de longa duração** e o **IG_USER_ID** (id numérico da conta profissional). Coloque em `IG_ACCESS_TOKEN` e `IG_USER_ID` no Render (Environment). **O token expira (~60 dias)** — quando o painel mostrar "Token expirado", gere outro e atualize.
-4. No Render, defina também `ADMIN_PASSWORD` (escolha uma senha forte), `CRON_SECRET` (um texto aleatório longo) e `PUBLIC_BASE_URL` (ex.: `https://shopee-ads-ai.onrender.com`).
-5. **Agendador**: o plano grátis do Render dorme sem visitas. Crie uma tarefa em cron-job.org que a cada 30 min faça `POST https://SEU-SITE.onrender.com/api/automation/tick` com o header `x-cron-secret: SEU_CRON_SECRET`. Cada chamada publica no máximo 1 post.
+### Configuração (uma vez)
+1. **Conta**: Instagram profissional (Comercial ou Criador de conteúdo).
+2. **App na Meta** (developers.facebook.com): crie um app do tipo "Empresa",
+   adicione o produto **Instagram** > "API com login do Instagram", e em
+   "Gerar tokens de acesso" adicione sua conta e gere o token. A tela mostra
+   o token (começa com `IG...`) e o id da conta.
+3. No Render (Environment): `IG_ACCESS_TOKEN` e `IG_USER_ID`. O resto
+   (`ADMIN_PASSWORD`, `AUTOMATION_MODE=auto`, `AUTOMATION_AUTOFILL=true`,
+   `PUBLIC_BASE_URL`) já está configurado.
+4. Recomendado: `RENDER_API_KEY` (dashboard.render.com > Account Settings >
+   API Keys) para o token renovado ser salvo sozinho.
 
-### Limitações importantes
-- **Link na legenda do Instagram não é clicável.** A legenda avisa isso; coloque seu link de afiliado na bio.
-- **Render grátis apaga os arquivos** a cada deploy/restart: fila, ajustes salvos na tela e histórico de posts somem. A cota real da Meta continua sendo consultada, então o limite não é burlado, mas para guardar a fila é preciso um banco externo (não implementado).
-- A consulta de "produtos em alta" usa campos da API de afiliados da Shopee que **não foram confirmados com credenciais reais**; se a Shopee recusar, o erro aparece no painel e o log do servidor mostra os argumentos aceitos.
-- A integração com a Meta foi testada apenas com respostas simuladas; o primeiro post real deve ser feito manualmente pelo botão "Publicar agora" para conferir.
-- Publicar automaticamente em conta de afiliado deve seguir as regras da Shopee e da Meta (identificação de publicidade). Revise as políticas antes de ligar o modo `auto`.
+### Limitações
+- **Link na legenda do Instagram não é clicável.** A legenda avisa; coloque um
+  link (ex.: sua página de afiliado ou um agregador de links) na bio.
+- A fila e os ajustes feitos na tela ainda ficam em arquivo e somem num
+  deploy. As regras e o anti-repetição não dependem disso; os ajustes
+  permanentes são feitos pelas variáveis de ambiente.
+- Publicar automaticamente como afiliado deve seguir as regras da Shopee e da
+  Meta. A identificação `#publi` é incluída sempre.
 
-### Rotas (todas exigem `x-admin-password`, exceto `tick` com `x-cron-secret` e a imagem temporária)
-`GET /api/trending`, `GET /api/automation/status`, `PUT /api/automation/settings`, `POST /api/automation/tick`, `GET/POST /api/queue`, `PATCH /api/queue/:id`, `POST /api/queue/:id/approve|reject|publish`, `GET /api/queue/:id/preview`, `GET /api/public-image/:token.jpg`.
+### Rotas
+Exigem `x-admin-password`: `GET /api/trending`, `GET /api/automation/status`,
+`PUT /api/automation/settings`, `POST /api/automation/refresh-token`,
+`GET/POST /api/queue`, `PATCH /api/queue/:id`, `POST /api/queue/:id/approve|reject|publish`,
+`GET /api/queue/:id/preview`. `POST /api/automation/tick` aceita também
+`x-cron-secret`. Públicas: `GET /api/automation/heartbeat` (só saúde, sem
+dados sensíveis) e `GET /api/public-image/:token.jpg` (imagem temporária).
 
 ### Testes
-`npm test` (Node 22+): regras de quantidade, publicação com Graph API simulada, autenticação.
+`npm test` (Node 22+): regras de quantidade, publicação com Graph API
+simulada, histórico vindo do Instagram com disco apagado, anti-repetição,
+falha segura, autenticação.
 
 ## Como rodar localmente
 

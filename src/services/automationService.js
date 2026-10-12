@@ -1,6 +1,6 @@
 import { getSettings } from "../db/settingsRepository.js";
 import {
-  listQueue, getQueueItem, enqueue, updateQueueItem, publishedTimestamps, wasProductQueuedRecently,
+  listQueue, getQueueItem, enqueue, updateQueueItem, publishedTimestamps, publishedEntries, wasProductQueuedRecently,
 } from "../db/queueRepository.js";
 import { checkPublishAllowed } from "./publishRules.js";
 import * as instagram from "./instagramService.js";
@@ -11,6 +11,7 @@ import { resolveProductPhoto } from "./imageService.js";
 import { renderArtJpeg, TEMPLATES } from "./artRenderService.js";
 import { putPublicImage, deletePublicImage } from "./publicImageStore.js";
 import { fetchProduct } from "./productService.js";
+import { getRecentPosts, rememberPost, mergeTimestamps, postedOnInstagram, productMarker } from "./igHistory.js";
 
 /**
  * automationService — o "piloto automático": produtos em alta -> fila ->
@@ -21,13 +22,31 @@ let busy = false; // trava para dois ticks não rodarem ao mesmo tempo
 const STALE_PUBLISHING_MS = 10 * 60 * 1000;
 
 /** Legenda final. O link NÃO é clicável no Instagram; por isso o aviso "link na bio". */
-export function buildCaption({ copy, affiliateLink }) {
+export const DEFAULT_HASHTAGS = "#publi #shopee #achadinhos #ofertas";
+
+export function buildCaption({ copy, affiliateLink, product }) {
   const body = (copy?.instagram || copy?.whatsapp || "").trim();
   const cta = copy?.cta ? `\n\n👉 ${copy.cta}` : "";
-  const hashtags = (process.env.IG_HASHTAGS || "#shopee #achadinhos #ofertas").trim();
+  let hashtags = (process.env.IG_HASHTAGS || DEFAULT_HASHTAGS).trim();
+  // Post de afiliado é publicidade: a identificação (#publi) é obrigatória pelas regras da Meta/CONAR.
+  if (!/#publi\b|#ad\b|#publicidade\b/i.test(hashtags)) hashtags = `#publi ${hashtags}`;
   const disclosure = process.env.IG_DISCLOSURE === "off" ? "" : "\n\n🔗 Link de afiliado na bio ou no link abaixo (no Instagram o link da legenda não é clicável):";
-  const caption = `${body}${cta}${disclosure}\n${affiliateLink}\n\n${hashtags}`.trim();
-  return caption.slice(0, 2200); // limite do Instagram
+  // O código do produto fica no fim e é o que impede repostar o mesmo item, mesmo se o servidor perder os arquivos.
+  const marker = product ? productMarker(product) : "";
+  const tail = `\n${affiliateLink}${marker ? `\n${marker}` : ""}\n\n${hashtags}`;
+  const head = `${body}${cta}${disclosure}`.slice(0, 2200 - tail.length);
+  return `${head}${tail}`.trim(); // limite do Instagram: 2200
+}
+
+/**
+ * Histórico de publicações: arquivos locais + posts reais da conta do Instagram.
+ * Lança erro se não conseguir ler o Instagram (quem chama não deve publicar).
+ */
+async function publishedHistory() {
+  const local = publishedEntries();
+  if (!instagram.isConfigured()) return { stamps: local.map((e) => e.t), posts: [] };
+  const posts = await getRecentPosts();
+  return { stamps: mergeTimestamps(local, posts), posts };
 }
 
 function pickTemplate() {
@@ -47,7 +66,7 @@ export async function enqueueFromUrl(url, { status } = {}) {
   return enqueue({
     product,
     copy,
-    caption: buildCaption({ copy, affiliateLink: affiliate.link }),
+    caption: buildCaption({ copy, affiliateLink: affiliate.link, product }),
     affiliateLink: affiliate.link,
     template: pickTemplate(),
     status: status || (settings.mode === "auto" ? "approved" : "pending"),
@@ -55,26 +74,35 @@ export async function enqueueFromUrl(url, { status } = {}) {
   });
 }
 
-/** Procura UM produto em alta ainda não usado, com foto real e link de afiliado, e enfileira. */
-async function fillQueueOnce(settings) {
-  const trending = await getTrendingProducts({ limit: 30 });
-  for (const p of trending) {
-    if (wasProductQueuedRecently(p.id, settings.dedupeDays)) continue;
-    const photo = await resolveProductPhoto(p, null).catch(() => ({ buffer: null }));
-    if (!photo.buffer) continue; // nunca posta sem foto real
-    const affiliate = await toAffiliateLink(p.url);
-    if (!affiliate.isAffiliate) continue; // nunca posta sem link de afiliado confirmado
-    const style = TEXT_STYLES[listQueue().length % TEXT_STYLES.length].key;
-    const copy = await generateCopy(p, style);
-    return enqueue({
-      product: p,
-      copy,
-      caption: buildCaption({ copy, affiliateLink: affiliate.link }),
-      affiliateLink: affiliate.link,
-      template: pickTemplate(),
-      status: settings.mode === "auto" ? "approved" : "pending",
-      source: "trending",
-    });
+/**
+ * Procura UM produto em alta ainda não usado (nem na fila, nem no Instagram),
+ * com foto real e link de afiliado, e enfileira. Percorre algumas páginas da
+ * lista de mais vendidos para não esgotar as opções.
+ */
+async function fillQueueOnce(settings, { posts = [], status } = {}) {
+  const maxPages = 5;
+  for (let page = 1; page <= maxPages; page++) {
+    const trending = await getTrendingProducts({ limit: 30, page });
+    if (!trending.length) break;
+    for (const p of trending) {
+      if (wasProductQueuedRecently(p.id, settings.dedupeDays)) continue;
+      if (postedOnInstagram(p, posts, settings.dedupeDays)) continue;
+      const photo = await resolveProductPhoto(p, null).catch(() => ({ buffer: null }));
+      if (!photo.buffer) continue; // nunca posta sem foto real
+      const affiliate = await toAffiliateLink(p.offerLink || p.url);
+      if (!affiliate.isAffiliate) continue; // nunca posta sem link de afiliado confirmado
+      const style = TEXT_STYLES[listQueue().length % TEXT_STYLES.length].key;
+      const copy = await generateCopy(p, style);
+      return enqueue({
+        product: p,
+        copy,
+        caption: buildCaption({ copy, affiliateLink: affiliate.link, product: p }),
+        affiliateLink: affiliate.link,
+        template: pickTemplate(),
+        status: status || (settings.mode === "auto" ? "approved" : "pending"),
+        source: "trending",
+      });
+    }
   }
   return null;
 }
@@ -82,10 +110,17 @@ async function fillQueueOnce(settings) {
 /** Estado geral para o painel (inclui a cota real da API, se o Instagram estiver configurado). */
 export async function getStatus() {
   const settings = getSettings();
-  const stamps = publishedTimestamps();
+  let stamps = publishedTimestamps();
+  let historyError = null;
+  try {
+    stamps = (await publishedHistory()).stamps;
+  } catch (e) {
+    historyError = e.message;
+  }
   const check = checkPublishAllowed({ now: new Date(), settings, publishedAt: stamps });
   const last24h = stamps.filter((t) => Date.now() - t < 24 * 3600 * 1000).length;
   const status = {
+    historyError,
     settings,
     instagram: { configured: instagram.isConfigured(), username: null, quota: null, error: null },
     publishedLast24h: last24h,
@@ -120,11 +155,27 @@ export async function publishItem(id, { baseUrl }) {
   }
   if (busy) return { published: false, reason: "Outra publicação já está em andamento." };
 
-  const settings = getSettings();
-  const check = checkPublishAllowed({ now: new Date(), settings, publishedAt: publishedTimestamps() });
-  if (!check.ok) return { published: false, reason: check.reason };
-
   busy = true;
+  const settings = getSettings();
+  let history;
+  try {
+    history = await publishedHistory();
+  } catch (e) {
+    busy = false;
+    // Sem saber o que já foi postado, não dá para garantir os limites: não publica.
+    return { published: false, reason: `Não consegui ler os posts recentes do Instagram: ${e.message}` };
+  }
+  const check = checkPublishAllowed({ now: new Date(), settings, publishedAt: history.stamps });
+  if (!check.ok) {
+    busy = false;
+    return { published: false, reason: check.reason };
+  }
+  if (postedOnInstagram(item.product, history.posts, settings.dedupeDays)) {
+    busy = false;
+    updateQueueItem(id, { status: "rejected", error: "Este produto já foi postado no Instagram recentemente." });
+    return { published: false, reason: "Produto já postado recentemente no Instagram (evitando repetição)." };
+  }
+
   let token = null;
   try {
     // Autoridade final: a cota real da própria API do Instagram.
@@ -152,6 +203,7 @@ export async function publishItem(id, { baseUrl }) {
     const imageUrl = `${baseUrl}/api/public-image/${token}.jpg`;
 
     const { mediaId, permalink } = await instagram.publishPhoto({ imageUrl, caption: item.caption });
+    rememberPost({ id: mediaId, caption: item.caption });
     const done = updateQueueItem(id, {
       status: "published", igMediaId: mediaId, permalink, publishedAt: new Date().toISOString(), error: null,
     });
@@ -165,7 +217,18 @@ export async function publishItem(id, { baseUrl }) {
   }
 }
 
-/** Chamado por um agendador externo (cron). Faz no máximo UMA publicação por chamada. */
+/**
+ * Um "ciclo" do piloto automático. Chamado pelo agendador interno (e também
+ * aceito via POST /api/automation/tick). Faz no máximo UMA publicação.
+ *
+ * Modo auto: primeiro confere se pode publicar AGORA (limite diário,
+ * intervalo, horário — com base nos posts reais do Instagram). Só então busca
+ * um produto em alta, gera texto/arte e publica. Assim não gasta chamadas de
+ * IA/Shopee à toa quando o post estaria bloqueado de qualquer jeito.
+ *
+ * Modo aprovação: mantém a fila abastecida para você aprovar no painel e
+ * publica o que já estiver aprovado.
+ */
 export async function runTick({ baseUrl }) {
   const settings = getSettings();
   const actions = [];
@@ -179,11 +242,42 @@ export async function runTick({ baseUrl }) {
     }
   }
 
-  if (settings.autoFill) {
+  let history = { stamps: publishedTimestamps(), posts: [] };
+  if (instagram.isConfigured()) {
+    try {
+      history = await publishedHistory();
+    } catch (e) {
+      actions.push(`não consegui ler os posts do Instagram: ${e.message}`);
+      return { actions, published: false, error: e.message };
+    }
+  }
+
+  const approved = () => listQueue().filter((i) => i.status === "approved").sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  if (settings.mode === "auto") {
+    if (!instagram.isConfigured()) {
+      actions.push("Instagram ainda não configurado (faltam IG_USER_ID / IG_ACCESS_TOKEN)");
+      return { actions, published: false };
+    }
+    const check = checkPublishAllowed({ now: new Date(), settings, publishedAt: history.stamps });
+    if (!check.ok) {
+      actions.push(`aguardando: ${check.reason}`);
+      return { actions, published: false, nextEligibleAt: check.nextEligibleAt };
+    }
+    if (!approved().length && settings.autoFill) {
+      try {
+        const added = await fillQueueOnce(settings, { posts: history.posts, status: "approved" });
+        actions.push(added ? `produto em alta escolhido: ${added.product.title}` : "nenhum produto novo elegível encontrado");
+      } catch (e) {
+        actions.push(`falha ao buscar produtos em alta: ${e.message}`);
+        return { actions, published: false, error: e.message };
+      }
+    }
+  } else if (settings.autoFill) {
     const waiting = listQueue().filter((i) => i.status === "pending" || i.status === "approved").length;
     if (waiting < settings.queueTarget) {
       try {
-        const added = await fillQueueOnce(settings);
+        const added = await fillQueueOnce(settings, { posts: history.posts });
         actions.push(added ? `produto em alta enfileirado: ${added.product.title}` : "nenhum produto novo elegível encontrado");
       } catch (e) {
         actions.push(`falha ao buscar produtos em alta: ${e.message}`);
@@ -191,12 +285,16 @@ export async function runTick({ baseUrl }) {
     }
   }
 
-  const next = listQueue().filter((i) => i.status === "approved").sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+  const next = approved()[0];
   if (!next) {
     actions.push("nada aprovado para publicar");
-    return { actions };
+    return { actions, published: false };
+  }
+  if (!instagram.isConfigured()) {
+    actions.push("Instagram ainda não configurado");
+    return { actions, published: false };
   }
   const result = await publishItem(next.id, { baseUrl });
   actions.push(result.published ? `publicado: ${next.product.title}` : `não publicado: ${result.reason}`);
-  return { actions, published: result.published };
+  return { actions, published: result.published, permalink: result.item?.permalink || null, error: result.published ? null : result.reason };
 }

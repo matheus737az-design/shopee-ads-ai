@@ -4,11 +4,12 @@ import { trendingLimiter } from "../middleware/rateLimit.js";
 import { getSettings, updateSettings } from "../db/settingsRepository.js";
 import { listQueue, getQueueItem, updateQueueItem } from "../db/queueRepository.js";
 import { getTrendingProducts } from "../services/trendingService.js";
-import { getStatus, runTick, publishItem, enqueueFromUrl, buildCaption } from "../services/automationService.js";
+import { getStatus, publishItem, enqueueFromUrl } from "../services/automationService.js";
 import { isValidShopeeUrl } from "../services/productService.js";
 import { resolveProductPhoto } from "../services/imageService.js";
 import { renderArt } from "../services/artRenderService.js";
 import { getPublicImage } from "../services/publicImageStore.js";
+import { tickNow, health, schedulerState, maybeRefreshToken } from "../services/scheduler.js";
 
 export function baseUrlFrom(req) {
   const fixed = process.env.PUBLIC_BASE_URL;
@@ -38,12 +39,28 @@ router.get("/trending", requireAdmin, trendingLimiter, wrap(async (req, res) => 
   res.json({ items });
 }));
 
-router.get("/automation/status", requireAdmin, wrap(async (req, res) => res.json(await getStatus())));
+router.get("/automation/status", requireAdmin, wrap(async (req, res) => {
+  const { lastResult, ...sched } = schedulerState();
+  res.json({ ...(await getStatus()), scheduler: { ...sched, lastActions: lastResult?.actions || [] } });
+}));
+
+// Público e sem dados sensíveis: só diz se o piloto automático está saudável.
+// 503 quando há problema — o alarme do GitHub Actions falha e você recebe e-mail.
+router.get("/automation/heartbeat", (req, res) => {
+  const h = health();
+  res.status(h.ok ? 200 : 503).set("Cache-Control", "no-store").json(h);
+});
+
+router.post("/automation/refresh-token", requireAdmin, wrap(async (req, res) => {
+  await maybeRefreshToken({ force: true });
+  const s = schedulerState();
+  res.json({ refreshedAt: s.tokenRefreshedAt, expiresAt: s.tokenExpiresAt, persisted: s.tokenPersisted, error: s.tokenError });
+}));
 
 router.put("/automation/settings", requireAdmin, wrap(async (req, res) => res.json(updateSettings(req.body || {}))));
 
 router.post("/automation/tick", requireCronOrAdmin, wrap(async (req, res) => {
-  res.json(await runTick({ baseUrl: baseUrlFrom(req) }));
+  res.json(await tickNow());
 }));
 
 router.get("/queue", requireAdmin, (req, res) => res.json({ items: listQueue() }));

@@ -1,0 +1,42 @@
+# Alarme do piloto automático.
+#
+# A cada 2 horas consulta /api/automation/heartbeat (público, sem dados
+# sensíveis). Se o piloto automático estiver com problema (ex.: token do
+# Instagram expirado, erro repetido), a resposta é 503, este workflow falha
+# e o GitHub te avisa por e-mail. Também "acorda" o Render se ele tiver dormido.
+#
+# Não precisa de nenhum segredo configurado no GitHub.
+name: Alarme do piloto automático
+
+on:
+  schedule:
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verificar saúde do piloto automático
+        env:
+          SITE: https://shopee-ads-ai.onrender.com
+        run: |
+          # O Render grátis pode levar ~1 min para acordar: tenta algumas vezes.
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o body.json -w '%{http_code}' --max-time 90 "$SITE/api/automation/heartbeat" || echo 000)
+            if [ "$code" = "200" ] || [ "$code" = "503" ]; then break; fi
+            echo "Tentativa $i: HTTP $code, aguardando o servidor acordar..."
+            sleep 20
+          done
+          echo "HTTP $code"
+          cat body.json || true
+          echo
+          if [ "$code" = "503" ]; then
+            echo "::error::O piloto automático está com problema: $(cat body.json). Abra o painel (aba Instagram) para ver os detalhes."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::O site não respondeu (HTTP $code)."
+            exit 1
+          fi

@@ -57,6 +57,13 @@ export function publishedTimestamps() {
     .map((i) => new Date(i.publishedAt).getTime());
 }
 
+/** Publicações registradas localmente: [{ t, mediaId }]. */
+export function publishedEntries() {
+  return readCollection(COLLECTION)
+    .filter((i) => i.status === "published" && i.publishedAt)
+    .map((i) => ({ t: new Date(i.publishedAt).getTime(), mediaId: i.igMediaId || null }));
+}
+
 /** Produto já foi enfileirado/publicado nos últimos `days` dias? (rejeitados não contam) */
 export function wasProductQueuedRecently(productId, days) {
   if (!days) return false;

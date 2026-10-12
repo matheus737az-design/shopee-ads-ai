@@ -26,22 +26,29 @@ const { getQueueItem, listQueue } = await import("../src/db/queueRepository.js")
 const product = { id: "p1", title: "Fone Bluetooth", price: 49.9, images: [], url: "https://shopee.com.br/x" };
 const mk = (status = "approved") => enqueue({ product: { ...product, id: "p" + Math.random() }, caption: "legenda", affiliateLink: "https://s.shopee.com.br/abc", template: "OFERTA", status });
 
-let calls, quota, failPublish;
+let calls, quota, failPublish, igPosts, mediaSeq = 0;
 function installFetch() {
   calls = [];
   globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     calls.push({ url: u, method: opts.method || "GET", body: opts.body ? String(opts.body) : "" });
     const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
+    if (u.includes("/123/media?")) return json({ data: igPosts.map((p) => ({ id: p.id, timestamp: new Date(p.timestamp).toISOString(), caption: p.caption })) });
     if (u.includes("content_publishing_limit")) return json({ data: [{ quota_usage: quota.used, config: { quota_total: quota.total } }] });
     if (u.endsWith("/123/media")) return json({ id: "cont1" });
     if (u.includes("/cont1")) return json({ status_code: "FINISHED" });
-    if (u.endsWith("/123/media_publish")) return failPublish ? json({ error: { code: 190, message: "expired" } }, 400) : json({ id: "media9" });
-    if (u.includes("/media9")) return json({ permalink: "https://instagram.com/p/xyz" });
+    if (u.endsWith("/123/media_publish")) {
+      if (failPublish) return json({ error: { code: 190, message: "expired" } }, 400);
+      const id = `media${++mediaSeq}`;
+      igPosts.unshift({ id, timestamp: Date.now(), caption: "" });
+      return json({ id });
+    }
+    if (/\/media\d+\?/.test(u)) return json({ permalink: "https://instagram.com/p/xyz" });
     return json({ error: { message: "inesperado " + u } }, 404);
   };
 }
-test.beforeEach(() => { quota = { used: 0, total: 100 }; failPublish = false; hasPhoto = true; installFetch(); });
+const { clearHistoryCache } = await import("../src/services/igHistory.js");
+test.beforeEach(() => { quota = { used: 0, total: 100 }; failPublish = false; hasPhoto = true; igPosts = []; clearHistoryCache(); installFetch(); });
 
 test("publica: container -> media_publish -> published, imagem é JPEG pública", async () => {
   const it = mk();
@@ -49,18 +56,17 @@ test("publica: container -> media_publish -> published, imagem é JPEG pública"
   assert.equal(r.published, true);
   const saved = getQueueItem(it.id);
   assert.equal(saved.status, "published");
-  assert.equal(saved.igMediaId, "media9");
+  assert.match(saved.igMediaId, /^media\d+$/);
   const create = calls.find((c) => c.url.endsWith("/123/media"));
   assert.match(create.body, /image_url=https%3A%2F%2Fapp\.test%2Fapi%2Fpublic-image%2F[a-f0-9]{48}\.jpg/);
 });
 
 test("respeita o limite diário configurado (2)", async () => {
+  fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
   const a = mk(), b = mk(), c = mk();
-  const before = listQueue().filter((i) => i.status === "published").length; // já pode haver 1 do teste anterior
   const results = [];
   for (const it of [a, b, c]) results.push((await publishItem(it.id, { baseUrl: "https://app.test" })).published);
-  const total = before + results.filter(Boolean).length;
-  assert.equal(total, 2);
+  assert.equal(results.filter(Boolean).length, 2);
   assert.equal(getQueueItem(c.id).status, "approved"); // ficou na fila, não foi perdido
 });
 
@@ -104,4 +110,55 @@ test("legenda: contém link, aviso de link na bio e cabe em 2200 caracteres", ()
   assert.ok(c.length <= 2200);
   const short = buildCaption({ copy: { instagram: "Oi", cta: "Confira" }, affiliateLink: "https://s.shopee.com.br/abc" });
   assert.match(short, /s\.shopee\.com\.br\/abc/); assert.match(short, /bio/);
+});
+
+test("disco apagado: o limite diário continua valendo pelos posts reais do Instagram", async () => {
+  fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
+  igPosts = [
+    { id: "a", timestamp: Date.now() - 3600e3, caption: "post 1" },
+    { id: "b", timestamp: Date.now() - 7200e3, caption: "post 2" },
+  ];
+  const it = mk();
+  const r = await publishItem(it.id, { baseUrl: "https://app.test" });
+  assert.equal(r.published, false);
+  assert.match(r.reason, /Limite diário/);
+  assert.ok(!calls.some((c) => c.url.endsWith("/123/media") && c.method === "POST"));
+});
+
+test("não publica se não conseguir ler os posts do Instagram (falha segura)", async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => (String(url).includes("/123/media?") ? new Response("{}", { status: 500 }) : orig(url, opts));
+  const it = mk();
+  const r = await publishItem(it.id, { baseUrl: "https://app.test" });
+  assert.equal(r.published, false);
+  assert.match(r.reason, /posts recentes/);
+});
+
+test("produto com o mesmo código já postado no Instagram não é repostado", async () => {
+  fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
+  igPosts = [{ id: "old", timestamp: Date.now() - 40 * 3600e3, caption: "achado\nCód. 987654321\n#publi" }];
+  const it = enqueue({ product: { ...product, id: "shopee_111_987654321" }, caption: "x", affiliateLink: "https://s.shopee.com.br/abc", template: "OFERTA", status: "approved" });
+  const r = await publishItem(it.id, { baseUrl: "https://app.test" });
+  assert.equal(r.published, false);
+  assert.match(r.reason, /já postado/);
+});
+
+test("legenda leva #publi e o código do produto", () => {
+  const c = buildCaption({ copy: { instagram: "Oi" }, affiliateLink: "https://s.shopee.com.br/abc", product: { id: "shopee_111_987654321" } });
+  assert.match(c, /#publi/);
+  assert.match(c, /Cód\. 987654321/);
+  const long = buildCaption({ copy: { instagram: "x".repeat(5000) }, affiliateLink: "https://s.shopee.com.br/abc", product: { id: "shopee_1_55555" } });
+  assert.ok(long.length <= 2200);
+  assert.match(long, /Cód\. 55555/); // o código nunca é cortado
+});
+
+test("modo auto: fora do horário não busca produto nem chama a Shopee", async () => {
+  const { updateSettings } = await import("../src/db/settingsRepository.js");
+  const h = new Date().getHours();
+  updateSettings({ mode: "auto", autoFill: true, windowStartHour: (h + 2) % 24, windowEndHour: ((h + 3) % 24) || 24 });
+  const r = await runTick({ baseUrl: "https://app.test" });
+  assert.equal(r.published, false);
+  assert.match(r.actions.join(" "), /Fora da janela/);
+  assert.ok(!calls.some((c) => c.url.includes("shopee")));
+  updateSettings({ mode: "approval", autoFill: false, windowStartHour: 0, windowEndHour: 24 });
 });

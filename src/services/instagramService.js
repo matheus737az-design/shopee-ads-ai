@@ -21,7 +21,9 @@ export function isConfigured() {
 }
 
 function base() {
-  const root = (process.env.IG_GRAPH_BASE || "https://graph.facebook.com").replace(/\/$/, "");
+  // Tokens do "Instagram Login" começam com "IG" e só funcionam em graph.instagram.com.
+  const auto = /^IG/.test(process.env.IG_ACCESS_TOKEN || "") ? "https://graph.instagram.com" : "https://graph.facebook.com";
+  const root = (process.env.IG_GRAPH_BASE || auto).replace(/\/$/, "");
   const version = process.env.IG_GRAPH_VERSION || "v21.0";
   return `${root}/${version}`;
 }
@@ -75,6 +77,50 @@ export async function getPublishingQuota() {
   });
   const row = data?.data?.[0] || {};
   return { used: row.quota_usage ?? null, total: row.config?.quota_total ?? null };
+}
+
+/**
+ * Posts recentes da conta (mais novo primeiro), com horário e legenda.
+ * @returns {Promise<Array<{id:string, timestamp:number, caption:string}>>}
+ */
+export async function listRecentMedia({ max = 100 } = {}) {
+  const out = [];
+  let after = null;
+  for (let page = 0; page < 4 && out.length < max; page++) {
+    const params = { fields: "id,timestamp,caption", limit: String(Math.min(50, max - out.length)) };
+    if (after) params.after = after;
+    const data = await graph(`/${process.env.IG_USER_ID}/media`, { params });
+    for (const m of data?.data || []) {
+      out.push({ id: m.id, timestamp: new Date(m.timestamp).getTime(), caption: m.caption || "" });
+    }
+    after = data?.paging?.cursors?.after;
+    if (!data?.paging?.next || !after) break;
+  }
+  return out;
+}
+
+/** O token veio do "Instagram Login" (graph.instagram.com)? Só esse tipo é renovável por API. */
+export function usesInstagramLogin() {
+  return /graph\.instagram\.com/.test(process.env.IG_GRAPH_BASE || "") || /^IG/.test(process.env.IG_ACCESS_TOKEN || "");
+}
+
+/**
+ * Renova um token de longa duração do Instagram Login (+60 dias).
+ * Documentação: GET https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token
+ * @returns {{token:string, expiresInSec:number|null}}
+ */
+export async function refreshLongLivedToken() {
+  const qs = new URLSearchParams({ grant_type: "ig_refresh_token", access_token: process.env.IG_ACCESS_TOKEN || "" });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(`https://graph.instagram.com/refresh_access_token?${qs}`, { signal: controller.signal });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.access_token) throw new Error(explain(json?.error || {}, res.status));
+    return { token: json.access_token, expiresInSec: json.expires_in ?? null };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function waitUntilReady(containerId) {
