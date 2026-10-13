@@ -12,6 +12,7 @@ import dashboardRoutes from "./routes/dashboard.js";
 import imageProxyRoutes from "./routes/imageProxy.js";
 import automationRoutes, { publicImageRouter } from "./routes/automation.js";
 import { startScheduler } from "./services/scheduler.js";
+import linkInBioRoutes from "./routes/linkInBio.js";
 
 const app = express();
 
@@ -46,6 +47,9 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/image-proxy", imageProxyRoutes);
 app.use("/api/public-image", publicImageRouter);
 app.use("/api", automationRoutes);
+
+// Vitrine pública para o link da bio do Instagram
+app.use("/achados", linkInBioRoutes);
 
 // Frontend estático — abra http://localhost:3333 no navegador para usar o app
 app.use(express.static(path.join(__dirname, "..", "public")));

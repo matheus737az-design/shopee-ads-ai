@@ -45,6 +45,12 @@ function moneyStr(v) {
   return Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+/** Assinatura da marca no canto das artes (ex.: "@maazshopp"). */
+function brandHandle() {
+  const h = (process.env.BRAND_HANDLE || "maazshopp").replace(/^@/, "");
+  return `@${h}`;
+}
+
 const FONT_DISPLAY = "'Arial Black', Arial, sans-serif";
 const FONT_BODY = "Arial, sans-serif";
 
@@ -149,7 +155,7 @@ function buildSvg({ width, height, product, photoDataUri, template }) {
       ${photoBlock}
       <text x="${titleX}" y="${titleY}" font-family="${FONT_BODY}" font-size="${width * 0.034}" font-weight="700" fill="${c.dark ? c.accent : "#ffffff"}" text-anchor="${titleAnchor}">${esc(title)}</text>
       ${priceBlock}
-      <text x="${width - width * 0.04}" y="${height - height * 0.02}" font-family="${FONT_BODY}" font-size="${width * 0.018}" fill="${footerColor}" text-anchor="end">shopee ads ai</text>
+      <text x="${width - width * 0.04}" y="${height - height * 0.025}" font-family="${FONT_BODY}" font-size="${width * 0.026}" font-weight="700" fill="${footerColor}" text-anchor="end">${esc(brandHandle())}</text>
     </svg>
   `;
 }
