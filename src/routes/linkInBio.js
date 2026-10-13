@@ -1,6 +1,8 @@
 import { Router } from "express";
 import * as instagram from "../services/instagramService.js";
-import { getRecentPosts } from "../services/igHistory.js";
+import { getRecentPosts, productCode } from "../services/igHistory.js";
+import { getTrendingProducts } from "../services/trendingService.js";
+import { hasCredentials } from "../services/shopeeAffiliateClient.js";
 
 /**
  * Página "link na bio" — /achados
@@ -47,7 +49,58 @@ export function productsFromPosts(posts) {
     .filter((p) => p.link && p.image);
 }
 
-export function page({ items, brand = BRAND(), error = null }) {
+const money = (v) => (v == null ? "" : Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }));
+
+/** Produtos em alta (ainda não postados) com link de afiliado e foto. */
+export function trendingCards(products, postedCodes = new Set()) {
+  const seen = new Set();
+  return products
+    .filter((p) => p.offerLink && p.images?.[0] && p.price != null)
+    .filter((p) => {
+      const code = productCode(p);
+      if (!code || postedCodes.has(code) || seen.has(code)) return false;
+      seen.add(code);
+      return true;
+    })
+    .map((p) => ({
+      link: p.offerLink,
+      image: p.images[0],
+      title: String(p.title || "Produto").replace(/\s+/g, " ").slice(0, 80),
+      price: p.price,
+      originalPrice: p.originalPrice,
+      discount: p.discountPercentage ? Math.round(p.discountPercentage) : null,
+    }));
+}
+
+// Cache dos mais vendidos: evita consultar a Shopee a cada visita.
+const TRENDING_TTL_MS = 30 * 60 * 1000;
+let trendingCache = { at: 0, items: [] };
+async function cachedTrending() {
+  if (Date.now() - trendingCache.at < TRENDING_TTL_MS && trendingCache.items.length) return trendingCache.items;
+  const pages = await Promise.all([1, 2].map((page) => getTrendingProducts({ limit: 30, page }).catch(() => [])));
+  const items = pages.flat();
+  if (items.length) trendingCache = { at: Date.now(), items };
+  return items.length ? items : trendingCache.items;
+}
+
+export function page({ items, more = [], brand = BRAND(), error = null }) {
+  const moreCards = more
+    .map(
+      (p) => `
+      <li class="card">
+        <a class="img sq" href="${esc(p.link)}" rel="sponsored noopener" target="_blank">
+          <img src="${esc(p.image)}" alt="${esc(p.title)}" loading="lazy" referrerpolicy="no-referrer" width="500" height="500">
+          ${p.discount ? `<span class="off">-${p.discount}%</span>` : ""}
+        </a>
+        <div class="info">
+          <p class="t">${esc(p.title)}</p>
+          <p class="pr">${p.originalPrice ? `<s>${esc(money(p.originalPrice))}</s>` : ""}<b>${esc(money(p.price))}</b></p>
+        </div>
+        <a class="buy" href="${esc(p.link)}" rel="sponsored noopener" target="_blank">Ver oferta</a>
+      </li>`
+    )
+    .join("");
+
   const cards = items
     .map(
       (p, i) => `
@@ -87,6 +140,15 @@ export function page({ items, brand = BRAND(), error = null }) {
   .buy{display:block;margin:10px;padding:12px 8px;border-radius:12px;background:var(--r);color:#fff;text-align:center;text-decoration:none;font-weight:800;font-size:15px}
   .buy:active{transform:scale(.98)}
   .empty{text-align:center;padding:40px 0}
+  h2{font-size:20px;font-weight:900;margin:28px 0 4px;letter-spacing:-.3px}
+  h2+.sub{margin:0 0 14px;font-size:14px;opacity:.7}
+  .sq{aspect-ratio:1/1;background:#fff}
+  .off{position:absolute;top:8px;right:8px;background:var(--y);color:var(--n);font-weight:900;font-size:13px;padding:4px 8px;border-radius:6px}
+  .info{padding:10px 10px 0}
+  .t{margin:0;font-size:13px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:34px}
+  .pr{margin:6px 0 0;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px}
+  .pr s{font-size:12px;opacity:.55}
+  .pr b{font-size:18px;color:var(--r);font-weight:900}
   footer{text-align:center;font-size:12px;opacity:.6;padding:0 16px 28px;line-height:1.5}
   @media (min-width:640px){ul{grid-template-columns:repeat(3,minmax(0,1fr))}}
 </style></head>
@@ -98,7 +160,9 @@ export function page({ items, brand = BRAND(), error = null }) {
   <a class="ig" href="https://www.instagram.com/${esc(brand.handle)}/" rel="noopener">@${esc(brand.handle)}</a>
 </header>
 <main>
-  ${items.length ? `<p class="hint">Toque na oferta para comprar direto no app da Shopee 👇</p><ul>${cards}</ul>` : `<p class="empty">${error ? "Não consegui carregar as ofertas agora. Tente de novo em instantes." : "As primeiras ofertas chegam em breve!"}</p>`}
+  ${items.length ? `<h2>📸 Postados no Instagram</h2><p class="sub">As ofertas que saíram no perfil. Toque para comprar 👇</p><ul>${cards}</ul>` : ""}
+  ${more.length ? `<h2>🔥 Mais vendidos agora</h2><p class="sub">Produtos em alta na Shopee, atualizados ao longo do dia.</p><ul>${moreCards}</ul>` : ""}
+  ${!items.length && !more.length ? `<p class="empty">${error ? "Não consegui carregar as ofertas agora. Tente de novo em instantes." : "As primeiras ofertas chegam em breve!"}</p>` : ""}
 </main>
 <footer>Links de afiliado: posso receber comissão pelas compras, sem custo extra para você.<br>Preços e estoque podem mudar na Shopee.</footer>
 </body></html>`;
@@ -109,16 +173,29 @@ const router = Router();
 router.get("/", async (req, res) => {
   const brand = BRAND();
   let items = [];
+  let posts = [];
   let error = null;
   if (instagram.isConfigured()) {
     try {
-      items = productsFromPosts(await getRecentPosts()).slice(0, 30);
+      posts = await getRecentPosts();
+      items = productsFromPosts(posts).slice(0, 30);
     } catch (e) {
       error = e.message;
       console.warn("[achados] falha ao ler posts:", e.message);
     }
   }
-  res.set("Cache-Control", "public, max-age=120").type("html").send(page({ items, brand, error }));
+  let more = [];
+  if (hasCredentials()) {
+    try {
+      const postedCodes = new Set(
+        posts.map((p) => (p.caption || "").match(/C[óo]d\.\s*(\w+)/i)?.[1]).filter(Boolean)
+      );
+      more = trendingCards(await cachedTrending(), postedCodes).slice(0, 40);
+    } catch (e) {
+      console.warn("[achados] falha ao buscar mais vendidos:", e.message);
+    }
+  }
+  res.set("Cache-Control", "public, max-age=120").type("html").send(page({ items, more, brand, error }));
 });
 
 export default router;

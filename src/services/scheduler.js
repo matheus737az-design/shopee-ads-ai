@@ -1,5 +1,6 @@
 import { runTick } from "./automationService.js";
 import * as instagram from "./instagramService.js";
+import { maybePublishWelcome } from "./welcomeService.js";
 
 /**
  * scheduler — o piloto automático roda DENTRO do servidor, sem depender de
@@ -162,7 +163,11 @@ export function startScheduler() {
   const minutes = Math.min(Math.max(Number(process.env.AUTOMATION_TICK_MINUTES) || 20, 5), 120);
 
   setTimeout(() => selfCheck(), 20 * 1000).unref?.(); // autodiagnóstico no log
-  setTimeout(() => tickNow(), 60 * 1000).unref?.(); // primeiro ciclo 1 min após subir
+  // primeiro ciclo 1 min após subir (antes, se pedido, os posts de boas-vindas — em sequência, sem concorrer)
+  setTimeout(async () => {
+    await maybePublishWelcome({ baseUrl: baseUrl() });
+    tickNow();
+  }, 60 * 1000).unref?.();
   setInterval(() => tickNow(), minutes * 60 * 1000).unref?.();
 
   const keepAwake = process.env.KEEP_AWAKE !== "false" && (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL);
