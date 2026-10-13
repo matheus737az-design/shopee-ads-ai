@@ -182,6 +182,36 @@ export async function renderArt({ product, photoBuffer, photoContentType, templa
   return { buffer: png, width: format.width, height: format.height };
 }
 
+const STORY_BG = { OFERTA: "#FF4B3E", ELEGANTE: "#1A1A2E", MODERNO: "#FFFFFF", VIRAL: "#C6F135" };
+const STORY_PILL = { OFERTA: ["#FFD23F", "#1A1A2E"], ELEGANTE: ["#C6A867", "#1A1A2E"], MODERNO: ["#1A1A2E", "#FFFFFF"], VIRAL: ["#1A1A2E", "#C6F135"] };
+
+/**
+ * Arte para STORY publicado pela API (1080×1920, JPEG).
+ *
+ * No story, o Instagram cobre o topo (barra de progresso + nome do perfil) e a
+ * base (campo de resposta), e a API não permite sticker de link. Por isso a
+ * arte do feed (1080×1350) vai inteira na faixa segura do meio e, embaixo,
+ * entra uma chamada "LINK NA BIO" no lugar do link clicável.
+ */
+export async function renderStoryJpeg({ product, photoBuffer, photoContentType, templateKey }) {
+  const template = TEMPLATES.includes(templateKey) ? templateKey : "OFERTA";
+  const W = 1080, H = 1920, TOP = 200;
+  const feed = await renderArt({ product, photoBuffer, photoContentType, templateKey: template, formatKey: "feed" });
+  const cta = esc((process.env.IG_STORY_CTA || "LINK NA BIO").slice(0, 28));
+  const [pillBg, pillFg] = STORY_PILL[template];
+  const pillW = 620, pillH = 110, pillY = TOP + 1350 + 70;
+  const overlay = Buffer.from(`
+    <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+      <rect x="${(W - pillW) / 2}" y="${pillY}" width="${pillW}" height="${pillH}" rx="${pillH / 2}" fill="${pillBg}"/>
+      <text x="${W / 2}" y="${pillY + 72}" font-family="${FONT_DISPLAY}" font-size="50" font-weight="800" fill="${pillFg}" text-anchor="middle">${cta}</text>
+    </svg>`);
+  const jpeg = await sharp({ create: { width: W, height: H, channels: 3, background: STORY_BG[template] } })
+    .composite([{ input: feed.buffer, top: TOP, left: 0 }, { input: overlay, top: 0, left: 0 }])
+    .jpeg({ quality: 90 })
+    .toBuffer();
+  return { buffer: jpeg, width: W, height: H };
+}
+
 /**
  * Mesma arte, mas em JPEG — formato exigido pela API de publicação do Instagram
  * (só aceita JPEG). Fundo achatado em branco para não haver transparência.

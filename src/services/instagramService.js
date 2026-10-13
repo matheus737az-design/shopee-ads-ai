@@ -138,15 +138,29 @@ async function waitUntilReady(containerId) {
 /** Publica uma foto de feed. @returns {{mediaId:string, permalink:string|null}} */
 export async function publishPhoto({ imageUrl, caption }) {
   if (!isConfigured()) throw new Error("Instagram não configurado (faltam IG_USER_ID / IG_ACCESS_TOKEN).");
-  const id = process.env.IG_USER_ID;
+  return publishMedia({ imageUrl, params: { caption } });
+}
 
-  const container = await graph(`/${id}/media`, { method: "POST", params: { image_url: imageUrl, caption } });
+/**
+ * Publica um story de imagem (media_type=STORIES). Story não tem legenda nem
+ * link clicável pela API — o texto/preço já vai na própria arte.
+ * @returns {{mediaId:string}}
+ */
+export async function publishStory({ imageUrl }) {
+  if (!isConfigured()) throw new Error("Instagram não configurado (faltam IG_USER_ID / IG_ACCESS_TOKEN).");
+  const { mediaId } = await publishMedia({ imageUrl, params: { media_type: "STORIES" }, withPermalink: false });
+  return { mediaId };
+}
+
+async function publishMedia({ imageUrl, params, withPermalink = true }) {
+  const id = process.env.IG_USER_ID;
+  const container = await graph(`/${id}/media`, { method: "POST", params: { image_url: imageUrl, ...params } });
   await waitUntilReady(container.id);
   const published = await graph(`/${id}/media_publish`, { method: "POST", params: { creation_id: container.id } });
   if (!published?.id) throw new Error("O Instagram não confirmou a publicação.");
 
   let permalink = null;
-  try {
+  if (withPermalink) try {
     const m = await graph(`/${published.id}`, { params: { fields: "permalink" } });
     permalink = m.permalink || null;
   } catch {

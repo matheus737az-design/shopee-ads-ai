@@ -26,7 +26,7 @@ const { getQueueItem, listQueue } = await import("../src/db/queueRepository.js")
 const product = { id: "p1", title: "Fone Bluetooth", price: 49.9, images: [], url: "https://shopee.com.br/x" };
 const mk = (status = "approved") => enqueue({ product: { ...product, id: "p" + Math.random() }, caption: "legenda", affiliateLink: "https://s.shopee.com.br/abc", template: "OFERTA", status });
 
-let calls, quota, failPublish, igPosts, mediaSeq = 0;
+let calls, quota, failPublish, igPosts, mediaSeq = 0, failStory = false;
 function installFetch() {
   calls = [];
   globalThis.fetch = async (url, opts = {}) => {
@@ -35,12 +35,14 @@ function installFetch() {
     const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
     if (u.includes("/123/media?")) return json({ data: igPosts.map((p) => ({ id: p.id, timestamp: new Date(p.timestamp).toISOString(), caption: p.caption })) });
     if (u.includes("content_publishing_limit")) return json({ data: [{ quota_usage: quota.used, config: { quota_total: quota.total } }] });
-    if (u.endsWith("/123/media")) return json({ id: "cont1" });
+    if (u.endsWith("/123/media")) return json({ id: /media_type=STORIES/.test(String(opts.body)) ? "cont1s" : "cont1" });
+    if (u.includes("/cont1s")) return json({ status_code: "FINISHED" });
     if (u.includes("/cont1")) return json({ status_code: "FINISHED" });
     if (u.endsWith("/123/media_publish")) {
       if (failPublish) return json({ error: { code: 190, message: "expired" } }, 400);
       const id = `media${++mediaSeq}`;
-      igPosts.unshift({ id, timestamp: Date.now(), caption: "" });
+      if (failStory && String(opts.body).includes("cont1s")) return json({ error: { message: "story falhou" } }, 400);
+      if (!String(opts.body).includes("cont1s")) igPosts.unshift({ id, timestamp: Date.now(), caption: "" }); // stories não aparecem em /media
       return json({ id });
     }
     if (/\/media\d+\?/.test(u)) return json({ permalink: "https://instagram.com/p/xyz" });
@@ -48,7 +50,7 @@ function installFetch() {
   };
 }
 const { clearHistoryCache } = await import("../src/services/igHistory.js");
-test.beforeEach(() => { quota = { used: 0, total: 100 }; failPublish = false; hasPhoto = true; igPosts = []; clearHistoryCache(); installFetch(); });
+test.beforeEach(() => { quota = { used: 0, total: 100 }; failPublish = false; failStory = false; hasPhoto = true; igPosts = []; clearHistoryCache(); installFetch(); });
 
 test("publica: container -> media_publish -> published, imagem é JPEG pública", async () => {
   const it = mk();
@@ -161,4 +163,37 @@ test("modo auto: fora do horário não busca produto nem chama a Shopee", async 
   assert.match(r.actions.join(" "), /Fora da janela/);
   assert.ok(!calls.some((c) => c.url.includes("shopee")));
   updateSettings({ mode: "approval", autoFill: false, windowStartHour: 0, windowEndHour: 24 });
+});
+
+test("post + story: publica o feed e depois um story 1080x1920 do mesmo produto", async () => {
+  fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
+  const it = mk();
+  const r = await publishItem(it.id, { baseUrl: "https://app.test" });
+  assert.equal(r.published, true);
+  const creates = calls.filter((c) => c.url.endsWith("/123/media") && c.method === "POST");
+  assert.equal(creates.length, 2);
+  assert.doesNotMatch(creates[0].body, /STORIES/);
+  assert.match(creates[1].body, /media_type=STORIES/);
+  assert.ok(getQueueItem(it.id).igStoryId);
+});
+
+test("se o story falhar, o post continua publicado e não é repetido", async () => {
+  fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
+  failStory = true;
+  const it = mk();
+  const r = await publishItem(it.id, { baseUrl: "https://app.test" });
+  assert.equal(r.published, true);
+  const saved = getQueueItem(it.id);
+  assert.equal(saved.status, "published");
+  assert.match(saved.storyError, /story falhou/);
+  assert.equal(calls.filter((c) => c.url.endsWith("/123/media_publish")).length, 2); // 1 feed + 1 tentativa de story
+});
+
+test("IG_ALSO_STORY=false publica só o feed", async () => {
+  fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
+  process.env.IG_ALSO_STORY = "false";
+  const it = mk();
+  await publishItem(it.id, { baseUrl: "https://app.test" });
+  assert.equal(calls.filter((c) => c.url.endsWith("/123/media") && c.method === "POST").length, 1);
+  delete process.env.IG_ALSO_STORY;
 });

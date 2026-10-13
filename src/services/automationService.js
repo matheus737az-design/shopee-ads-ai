@@ -8,7 +8,7 @@ import { getTrendingProducts } from "./trendingService.js";
 import { toAffiliateLink } from "./affiliateService.js";
 import { generateCopy, TEXT_STYLES } from "./aiService.js";
 import { resolveProductPhoto } from "./imageService.js";
-import { renderArtJpeg, TEMPLATES } from "./artRenderService.js";
+import { renderArtJpeg, renderStoryJpeg, TEMPLATES } from "./artRenderService.js";
 import { putPublicImage, deletePublicImage } from "./publicImageStore.js";
 import { fetchProduct } from "./productService.js";
 import { getRecentPosts, rememberPost, mergeTimestamps, postedOnInstagram, productMarker } from "./igHistory.js";
@@ -47,6 +47,11 @@ async function publishedHistory() {
   if (!instagram.isConfigured()) return { stamps: local.map((e) => e.t), posts: [] };
   const posts = await getRecentPosts();
   return { stamps: mergeTimestamps(local, posts), posts };
+}
+
+/** Publica também um story junto com cada post? Padrão: sim (IG_ALSO_STORY=false desliga). */
+export function storiesEnabled() {
+  return process.env.IG_ALSO_STORY !== "false";
 }
 
 function pickTemplate() {
@@ -177,6 +182,7 @@ export async function publishItem(id, { baseUrl }) {
   }
 
   let token = null;
+  let storyToken = null;
   try {
     // Autoridade final: a cota real da própria API do Instagram.
     try {
@@ -204,15 +210,35 @@ export async function publishItem(id, { baseUrl }) {
 
     const { mediaId, permalink } = await instagram.publishPhoto({ imageUrl, caption: item.caption });
     rememberPost({ id: mediaId, caption: item.caption });
-    const done = updateQueueItem(id, {
+    let done = updateQueueItem(id, {
       status: "published", igMediaId: mediaId, permalink, publishedAt: new Date().toISOString(), error: null,
     });
+
+    // Story do mesmo produto (arte vertical 1080×1920). O post do feed já saiu:
+    // se o story falhar, só registramos o erro — nunca repostamos o feed.
+    if (storiesEnabled()) {
+      try {
+        const story = await renderStoryJpeg({
+          product: item.product,
+          photoBuffer: photo.buffer,
+          photoContentType: photo.contentType,
+          templateKey: item.template,
+        });
+        storyToken = putPublicImage(story.buffer);
+        const { mediaId: storyId } = await instagram.publishStory({ imageUrl: `${baseUrl}/api/public-image/${storyToken}.jpg` });
+        done = updateQueueItem(id, { igStoryId: storyId, storyError: null });
+      } catch (e) {
+        console.warn("[automação] post publicado, mas o story falhou:", e.message);
+        done = updateQueueItem(id, { storyError: e.message });
+      }
+    }
     return { published: true, item: done };
   } catch (err) {
     const failed = updateQueueItem(id, { status: "failed", error: err.message });
     return { published: false, reason: err.message, item: failed };
   } finally {
     if (token) deletePublicImage(token);
+    if (storyToken) deletePublicImage(storyToken);
     busy = false;
   }
 }

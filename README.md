@@ -126,6 +126,10 @@ Você não precisa aprovar nada (modo `auto`) nem manter nenhum serviço externo
 - **Token que não expira**: com token do *Instagram Login*, o servidor o renova
   a cada 7 dias. Se `RENDER_API_KEY` estiver configurada, grava o token novo
   no Render e faz redeploy sozinho.
+- **Post + story**: cada produto sai no feed e, logo em seguida, num story
+  1080×1920 (arte do feed na faixa segura + "LINK NA BIO", já que a API não
+  permite sticker de link). Se o story falhar, o post continua valendo e não é
+  repetido. Desligue com `IG_ALSO_STORY=false`.
 - **Alarme**: o workflow `.github/workflows/alarme.yml` consulta
   `/api/automation/heartbeat` a cada 2h. Se houver problema (token inválido,
   erro repetido), o workflow falha e **o GitHub te manda e-mail**.
