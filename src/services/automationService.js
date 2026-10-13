@@ -11,7 +11,7 @@ import { resolveProductPhoto } from "./imageService.js";
 import { renderArtJpeg, renderStoryJpeg, TEMPLATES } from "./artRenderService.js";
 import { putPublicImage, deletePublicImage } from "./publicImageStore.js";
 import { fetchProduct } from "./productService.js";
-import { getRecentPosts, rememberPost, mergeTimestamps, postedOnInstagram, productMarker } from "./igHistory.js";
+import { getRecentPosts, rememberPost, mergeTimestamps, postedOnInstagram, productMarker, isProductPost } from "./igHistory.js";
 
 /**
  * automationService — o "piloto automático": produtos em alta -> fila ->
@@ -46,7 +46,10 @@ async function publishedHistory() {
   const local = publishedEntries();
   if (!instagram.isConfigured()) return { stamps: local.map((e) => e.t), posts: [] };
   const posts = await getRecentPosts();
-  return { stamps: mergeTimestamps(local, posts), posts };
+  // Só posts de produto (com "Cód.") contam para o limite diário/intervalo:
+  // posts feitos à mão (boas-vindas, avisos) não travam o piloto automático.
+  const productPosts = posts.filter((p) => isProductPost(p.caption));
+  return { stamps: mergeTimestamps(local, productPosts), posts };
 }
 
 /** Publica também um story junto com cada post? Padrão: sim (IG_ALSO_STORY=false desliga). */

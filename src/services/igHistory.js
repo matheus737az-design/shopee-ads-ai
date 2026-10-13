@@ -59,6 +59,11 @@ export function mergeTimestamps(local, remote) {
   return all.sort((a, b) => a - b);
 }
 
+/** Post gerado pelo sistema (tem o código do produto na legenda)? */
+export function isProductPost(caption) {
+  return /C[óo]d\.\s*\w+/i.test(caption || "");
+}
+
 /** O produto já aparece em algum post recente da conta (dentro de `days`)? */
 export function postedOnInstagram(product, posts, days) {
   const code = productCode(product);

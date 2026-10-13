@@ -117,8 +117,8 @@ test("legenda: contém link, aviso de link na bio e cabe em 2200 caracteres", ()
 test("disco apagado: o limite diário continua valendo pelos posts reais do Instagram", async () => {
   fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
   igPosts = [
-    { id: "a", timestamp: Date.now() - 3600e3, caption: "post 1" },
-    { id: "b", timestamp: Date.now() - 7200e3, caption: "post 2" },
+    { id: "a", timestamp: Date.now() - 3600e3, caption: "post 1\nCód. 111" },
+    { id: "b", timestamp: Date.now() - 7200e3, caption: "post 2\nCód. 222" },
   ];
   const it = mk();
   const r = await publishItem(it.id, { baseUrl: "https://app.test" });
@@ -196,4 +196,12 @@ test("IG_ALSO_STORY=false publica só o feed", async () => {
   await publishItem(it.id, { baseUrl: "https://app.test" });
   assert.equal(calls.filter((c) => c.url.endsWith("/123/media") && c.method === "POST").length, 1);
   delete process.env.IG_ALSO_STORY;
+});
+
+test("posts feitos à mão (sem Cód.) não contam para o limite diário", async () => {
+  fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
+  igPosts = [1, 2, 3].map((i) => ({ id: "w" + i, timestamp: Date.now() - i * 60e3, caption: "Bem-vindo " + i }));
+  const it = mk();
+  const r = await publishItem(it.id, { baseUrl: "https://app.test" });
+  assert.equal(r.published, true);
 });
