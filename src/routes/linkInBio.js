@@ -42,11 +42,14 @@ export function productsFromPosts(posts) {
       id: p.id,
       link: extractLink(p.caption),
       title: extractTitle(p.caption),
-      image: p.mediaType === "VIDEO" ? null : p.mediaUrl,
+      // Reels aparecem pela capa (thumbnail); fotos pela própria imagem
+      image: p.mediaType === "VIDEO" ? p.thumbnailUrl : p.mediaUrl,
+      code: (p.caption || "").match(/C[óo]d\.\s*(\w+)/i)?.[1] || null,
       permalink: p.permalink,
       timestamp: p.timestamp,
     }))
-    .filter((p) => p.link && p.image);
+    .filter((p) => p.link && p.image)
+    .filter((p, i, all) => !p.code || all.findIndex((q) => q.code === p.code) === i); // mesmo produto 1x (o mais recente)
 }
 
 const money = (v) => (v == null ? "" : Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }));

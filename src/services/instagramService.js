@@ -87,7 +87,7 @@ export async function listRecentMedia({ max = 100 } = {}) {
   const out = [];
   let after = null;
   for (let page = 0; page < 4 && out.length < max; page++) {
-    const params = { fields: "id,timestamp,caption,media_type,media_url,permalink", limit: String(Math.min(50, max - out.length)) };
+    const params = { fields: "id,timestamp,caption,media_type,media_url,thumbnail_url,permalink", limit: String(Math.min(50, max - out.length)) };
     if (after) params.after = after;
     const data = await graph(`/${process.env.IG_USER_ID}/media`, { params });
     for (const m of data?.data || []) {
@@ -97,6 +97,7 @@ export async function listRecentMedia({ max = 100 } = {}) {
         caption: m.caption || "",
         mediaType: m.media_type || null,
         mediaUrl: m.media_url || null,
+        thumbnailUrl: m.thumbnail_url || null,
         permalink: m.permalink || null,
       });
     }

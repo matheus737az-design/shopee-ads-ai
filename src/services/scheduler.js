@@ -1,6 +1,7 @@
 import { runTick } from "./automationService.js";
 import * as instagram from "./instagramService.js";
 import { maybePublishWelcome } from "./welcomeService.js";
+import { maybeReplaceWithReel } from "./replaceService.js";
 
 /**
  * scheduler — o piloto automático roda DENTRO do servidor, sem depender de
@@ -178,6 +179,7 @@ export function startScheduler() {
   // primeiro ciclo 1 min após subir (antes, se pedido, os posts de boas-vindas — em sequência, sem concorrer)
   setTimeout(async () => {
     await maybePublishWelcome({ baseUrl: baseUrl() });
+    await maybeReplaceWithReel({ baseUrl: baseUrl() });
     tickNow();
   }, 60 * 1000).unref?.();
   setInterval(() => tickNow(), minutes * 60 * 1000).unref?.();
