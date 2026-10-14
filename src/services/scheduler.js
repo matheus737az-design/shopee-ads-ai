@@ -142,7 +142,7 @@ async function selfCheck() {
   } catch (e) {
     console.warn(`[diagnóstico] Shopee em alta: FALHOU — ${e.message}`);
   }
-  if ((process.env.IG_FORMAT || "reels") !== "photo" || process.env.REELS_SELFTEST === "on") {
+  if (process.env.REELS_SELFTEST === "on") {
     try {
       const sharp = (await import("sharp")).default;
       const { renderReel } = await import("./reelService.js");
