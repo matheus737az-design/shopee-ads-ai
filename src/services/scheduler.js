@@ -141,6 +141,18 @@ async function selfCheck() {
   } catch (e) {
     console.warn(`[diagnóstico] Shopee em alta: FALHOU — ${e.message}`);
   }
+  if ((process.env.IG_FORMAT || "reels") !== "photo" || process.env.REELS_SELFTEST === "on") {
+    try {
+      const sharp = (await import("sharp")).default;
+      const { renderReel } = await import("./reelService.js");
+      const photo = await sharp({ create: { width: 400, height: 400, channels: 3, background: "#dfe6ee" } }).jpeg().toBuffer();
+      const t0 = Date.now();
+      const r = await renderReel({ product: { title: "Teste de geração de Reel", price: 19.9, originalPrice: 39.9, discountPercentage: 50 }, photoBuffer: photo });
+      console.log(`[diagnóstico] Reel: OK, vídeo de teste gerado em ${((Date.now() - t0) / 1000).toFixed(1)}s (${Math.round(r.buffer.length / 1024)} KB).`);
+    } catch (e) {
+      console.warn(`[diagnóstico] Reel: FALHOU — ${e.message} (os posts vão sair como foto)`);
+    }
+  }
   if (instagram.isConfigured()) {
     try {
       const { username } = await instagram.getAccountStatus();

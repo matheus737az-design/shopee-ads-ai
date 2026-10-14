@@ -126,6 +126,13 @@ Você não precisa aprovar nada (modo `auto`) nem manter nenhum serviço externo
 - **Token que não expira**: com token do *Instagram Login*, o servidor o renova
   a cada 7 dias. Se `RENDER_API_KEY` estiver configurada, grava o token novo
   no Render e faz redeploy sozinho.
+- **Reels automáticos** (`src/services/reelService.js`): cada produto vira um
+  vídeo vertical de 8s (720×1280) — frase de impacto, foto em movimento,
+  preço antigo/novo, selo de desconto e "LINK NA BIO", com batida
+  sintetizada (sem música de terceiros). sharp desenha as camadas e o ffmpeg
+  (`ffmpeg-static`) anima. Tudo dentro da área segura do Reel. Se o vídeo não
+  puder ser gerado ou a Meta recusar antes de publicar, o produto sai como
+  foto. `IG_FORMAT=photo` desliga.
 - **Post + story**: cada produto sai no feed e, logo em seguida, num story
   1080×1920 (arte do feed na faixa segura + "LINK NA BIO", já que a API não
   permite sticker de link). Se o story falhar, o post continua valendo e não é

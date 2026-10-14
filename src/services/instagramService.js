@@ -130,16 +130,47 @@ export async function refreshLongLivedToken() {
   }
 }
 
-async function waitUntilReady(containerId) {
-  for (let i = 0; i < 20; i++) {
-    const s = await graph(`/${containerId}`, { params: { fields: "status_code" } });
+async function waitUntilReady(containerId, { tries = 20, everyMs = 2000, what = "a imagem" } = {}) {
+  for (let i = 0; i < tries; i++) {
+    const s = await graph(`/${containerId}`, { params: { fields: "status_code,status" } });
     if (s.status_code === "FINISHED") return;
     if (s.status_code === "ERROR" || s.status_code === "EXPIRED") {
-      throw new Error(`O Instagram não conseguiu processar a imagem (status ${s.status_code}).`);
+      throw new Error(`O Instagram não conseguiu processar ${what} (status ${s.status_code}${s.status ? `: ${s.status}` : ""}).`);
     }
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, everyMs));
   }
-  throw new Error("O Instagram demorou demais para processar a imagem.");
+  throw new Error(`O Instagram demorou demais para processar ${what}.`);
+}
+
+/**
+ * Publica um Reel (vídeo MP4 em URL pública). Vídeo leva mais tempo para a
+ * Meta processar, então espera até ~5 min. Erros ANTES do media_publish
+ * vêm marcados com beforePublish=true (nada foi ao ar — é seguro tentar
+ * postar como foto no lugar).
+ * @returns {{mediaId:string, permalink:string|null}}
+ */
+export async function publishReel({ videoUrl, caption, coverOffsetMs }) {
+  if (!isConfigured()) throw new Error("Instagram não configurado (faltam IG_USER_ID / IG_ACCESS_TOKEN).");
+  const id = process.env.IG_USER_ID;
+  let container;
+  try {
+    const params = { media_type: "REELS", video_url: videoUrl, caption, share_to_feed: "true" };
+    if (coverOffsetMs != null) params.thumb_offset = String(coverOffsetMs);
+    container = await graph(`/${id}/media`, { method: "POST", params });
+    await waitUntilReady(container.id, { tries: 60, everyMs: 5000, what: "o vídeo" });
+  } catch (e) {
+    e.beforePublish = true;
+    throw e;
+  }
+  const published = await graph(`/${id}/media_publish`, { method: "POST", params: { creation_id: container.id } });
+  if (!published?.id) throw new Error("O Instagram não confirmou a publicação do Reel.");
+  let permalink = null;
+  try {
+    permalink = (await graph(`/${published.id}`, { params: { fields: "permalink" } })).permalink || null;
+  } catch {
+    /* opcional */
+  }
+  return { mediaId: published.id, permalink };
 }
 
 /** Publica uma foto de feed. @returns {{mediaId:string, permalink:string|null}} */

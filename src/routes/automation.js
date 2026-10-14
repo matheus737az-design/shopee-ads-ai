@@ -8,7 +8,7 @@ import { getStatus, publishItem, enqueueFromUrl } from "../services/automationSe
 import { isValidShopeeUrl } from "../services/productService.js";
 import { resolveProductPhoto } from "../services/imageService.js";
 import { renderArt } from "../services/artRenderService.js";
-import { getPublicImage } from "../services/publicImageStore.js";
+import { getPublicMedia } from "../services/publicImageStore.js";
 import { tickNow, health, schedulerState, maybeRefreshToken } from "../services/scheduler.js";
 
 export function baseUrlFrom(req) {
@@ -26,10 +26,10 @@ const wrap = (fn) => (req, res) =>
 /** Imagem pública temporária (a Meta baixa daqui). Token aleatório, expira em 15 min. */
 export const publicImageRouter = Router();
 publicImageRouter.get("/:file", (req, res) => {
-  const token = String(req.params.file).replace(/\.jpg$/, "");
-  const buf = /^[a-f0-9]{48}$/.test(token) ? getPublicImage(token) : null;
-  if (!buf) return res.status(404).json({ error: "Imagem expirada ou inexistente." });
-  res.set("Content-Type", "image/jpeg").set("Cache-Control", "no-store").send(buf);
+  const token = String(req.params.file).replace(/\.(jpg|mp4)$/, "");
+  const media = /^[a-f0-9]{48}$/.test(token) ? getPublicMedia(token) : null;
+  if (!media) return res.status(404).json({ error: "Arquivo expirado ou inexistente." });
+  res.set("Content-Type", media.contentType).set("Cache-Control", "no-store").set("Accept-Ranges", "bytes").send(media.buffer);
 });
 
 const router = Router();

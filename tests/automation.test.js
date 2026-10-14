@@ -12,6 +12,7 @@ process.env.IG_POST_WINDOW_START = "0";
 process.env.IG_POST_WINDOW_END = "24";
 process.env.IG_MIN_HOURS_BETWEEN_POSTS = "0";
 process.env.IG_MAX_POSTS_PER_DAY = "2";
+process.env.IG_FORMAT = "photo"; // os testes de Reel ligam explicitamente
 
 const photo = await sharp({ create: { width: 50, height: 50, channels: 3, background: "#f00" } }).jpeg().toBuffer();
 let hasPhoto = true;
@@ -26,7 +27,7 @@ const { getQueueItem, listQueue } = await import("../src/db/queueRepository.js")
 const product = { id: "p1", title: "Fone Bluetooth", price: 49.9, images: [], url: "https://shopee.com.br/x" };
 const mk = (status = "approved") => enqueue({ product: { ...product, id: "p" + Math.random() }, caption: "legenda", affiliateLink: "https://s.shopee.com.br/abc", template: "OFERTA", status });
 
-let calls, quota, failPublish, igPosts, mediaSeq = 0, failStory = false;
+let calls, quota, failPublish, igPosts, mediaSeq = 0, failStory = false, reelContainerFails = false, failReelPublish = false;
 function installFetch() {
   calls = [];
   globalThis.fetch = async (url, opts = {}) => {
@@ -35,13 +36,18 @@ function installFetch() {
     const json = (o, status = 200) => new Response(JSON.stringify(o), { status });
     if (u.includes("/123/media?")) return json({ data: igPosts.map((p) => ({ id: p.id, timestamp: new Date(p.timestamp).toISOString(), caption: p.caption })) });
     if (u.includes("content_publishing_limit")) return json({ data: [{ quota_usage: quota.used, config: { quota_total: quota.total } }] });
-    if (u.endsWith("/123/media")) return json({ id: /media_type=STORIES/.test(String(opts.body)) ? "cont1s" : "cont1" });
-    if (u.includes("/cont1s")) return json({ status_code: "FINISHED" });
+    if (u.endsWith("/123/media")) {
+      const b = String(opts.body);
+      if (/media_type=REELS/.test(b)) return reelContainerFails ? json({ error: { message: "video invalido" } }, 400) : json({ id: "cont1r" });
+      return json({ id: /media_type=STORIES/.test(b) ? "cont1s" : "cont1" });
+    }
+    if (u.includes("/cont1s") || u.includes("/cont1r")) return json({ status_code: "FINISHED" });
     if (u.includes("/cont1")) return json({ status_code: "FINISHED" });
     if (u.endsWith("/123/media_publish")) {
       if (failPublish) return json({ error: { code: 190, message: "expired" } }, 400);
       const id = `media${++mediaSeq}`;
       if (failStory && String(opts.body).includes("cont1s")) return json({ error: { message: "story falhou" } }, 400);
+      if (failReelPublish && String(opts.body).includes("cont1r")) return json({ error: { message: "timeout no publish" } }, 500);
       if (!String(opts.body).includes("cont1s")) igPosts.unshift({ id, timestamp: Date.now(), caption: "" }); // stories não aparecem em /media
       return json({ id });
     }
@@ -50,7 +56,7 @@ function installFetch() {
   };
 }
 const { clearHistoryCache } = await import("../src/services/igHistory.js");
-test.beforeEach(() => { quota = { used: 0, total: 100 }; failPublish = false; failStory = false; hasPhoto = true; igPosts = []; clearHistoryCache(); installFetch(); });
+test.beforeEach(() => { quota = { used: 0, total: 100 }; failPublish = false; failStory = false; reelContainerFails = false; failReelPublish = false; hasPhoto = true; igPosts = []; clearHistoryCache(); installFetch(); });
 
 test("publica: container -> media_publish -> published, imagem é JPEG pública", async () => {
   const it = mk();
@@ -204,4 +210,56 @@ test("posts feitos à mão (sem Cód.) não contam para o limite diário", async
   const it = mk();
   const r = await publishItem(it.id, { baseUrl: "https://app.test" });
   assert.equal(r.published, true);
+});
+
+const reset = () => { fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); fs.mkdirSync(process.env.DATA_DIR, { recursive: true }); };
+const mediaCreates = () => calls.filter((c) => c.url.endsWith("/123/media") && c.method === "POST");
+
+test("Reels: gera o vídeo e publica como REELS (MP4 público) + story", { timeout: 120000 }, async () => {
+  reset(); process.env.IG_FORMAT = "reels";
+  const it = mk();
+  const r = await publishItem(it.id, { baseUrl: "https://app.test" });
+  delete process.env.IG_FORMAT; process.env.IG_FORMAT = "photo";
+  assert.equal(r.published, true);
+  const creates = mediaCreates();
+  assert.match(creates[0].body, /media_type=REELS/);
+  assert.match(creates[0].body, /video_url=https%3A%2F%2Fapp\.test%2Fapi%2Fpublic-image%2F[a-f0-9]{48}\.mp4/);
+  assert.match(creates[0].body, /share_to_feed=true/);
+  assert.match(creates[1].body, /media_type=STORIES/);
+  assert.equal(getQueueItem(it.id).kind, "reel");
+});
+
+test("Reels: se o ffmpeg não existir, posta como foto", { timeout: 60000 }, async () => {
+  reset(); process.env.IG_FORMAT = "reels"; process.env.FFMPEG_PATH = "/nao/existe/ffmpeg";
+  const it = mk();
+  const r = await publishItem(it.id, { baseUrl: "https://app.test" });
+  delete process.env.FFMPEG_PATH; process.env.IG_FORMAT = "photo";
+  assert.equal(r.published, true);
+  assert.doesNotMatch(mediaCreates()[0].body, /REELS/);
+  const saved = getQueueItem(it.id);
+  assert.equal(saved.kind, "photo");
+  assert.match(saved.reelError, /vídeo não gerado/);
+});
+
+test("Reels: Instagram recusa o vídeo antes de publicar -> posta como foto", { timeout: 120000 }, async () => {
+  reset(); process.env.IG_FORMAT = "reels"; reelContainerFails = true;
+  const it = mk();
+  const r = await publishItem(it.id, { baseUrl: "https://app.test" });
+  process.env.IG_FORMAT = "photo";
+  assert.equal(r.published, true);
+  assert.equal(getQueueItem(it.id).kind, "photo");
+});
+
+test("Reels: erro no media_publish NÃO posta foto (evita duplicar)", { timeout: 120000 }, async () => {
+  reset(); process.env.IG_FORMAT = "reels"; failReelPublish = true;
+  const it = mk();
+  const r = await publishItem(it.id, { baseUrl: "https://app.test" });
+  process.env.IG_FORMAT = "photo";
+  assert.equal(r.published, false);
+  assert.equal(getQueueItem(it.id).status, "failed");
+  assert.equal(mediaCreates().length, 1); // só o container do Reel
+});
+
+test("legenda puxa conversa", () => {
+  assert.match(buildCaption({ copy: { instagram: "Oi" }, affiliateLink: "https://s.shopee.com.br/a" }), /Você compraria\?/);
 });

@@ -10,6 +10,7 @@ import { generateCopy, TEXT_STYLES } from "./aiService.js";
 import { resolveProductPhoto } from "./imageService.js";
 import { renderArtJpeg, renderStoryJpeg, TEMPLATES } from "./artRenderService.js";
 import { putPublicImage, deletePublicImage } from "./publicImageStore.js";
+import { renderReel, HOOKS } from "./reelService.js";
 import { fetchProduct } from "./productService.js";
 import { getRecentPosts, rememberPost, mergeTimestamps, postedOnInstagram, productMarker, isProductPost } from "./igHistory.js";
 
@@ -27,6 +28,7 @@ export const DEFAULT_HASHTAGS = "#publi #shopee #achadinhos #ofertas";
 export function buildCaption({ copy, affiliateLink, product }) {
   const body = (copy?.instagram || copy?.whatsapp || "").trim();
   const cta = copy?.cta ? `\n\n👉 ${copy.cta}` : "";
+  const ask = process.env.IG_ASK === "off" ? "" : "\n\n💬 Você compraria? Comenta aqui 👇";
   let hashtags = (process.env.IG_HASHTAGS || DEFAULT_HASHTAGS).trim();
   // Post de afiliado é publicidade: a identificação (#publi) é obrigatória pelas regras da Meta/CONAR.
   if (!/#publi\b|#ad\b|#publicidade\b/i.test(hashtags)) hashtags = `#publi ${hashtags}`;
@@ -34,7 +36,7 @@ export function buildCaption({ copy, affiliateLink, product }) {
   // O código do produto fica no fim e é o que impede repostar o mesmo item, mesmo se o servidor perder os arquivos.
   const marker = product ? productMarker(product) : "";
   const tail = `\n${affiliateLink}${marker ? `\n${marker}` : ""}\n\n${hashtags}`;
-  const head = `${body}${cta}${disclosure}`.slice(0, 2200 - tail.length);
+  const head = `${body}${cta}${ask}${disclosure}`.slice(0, 2200 - tail.length);
   return `${head}${tail}`.trim(); // limite do Instagram: 2200
 }
 
@@ -50,6 +52,11 @@ async function publishedHistory() {
   // posts feitos à mão (boas-vindas, avisos) não travam o piloto automático.
   const productPosts = posts.filter((p) => isProductPost(p.caption));
   return { stamps: mergeTimestamps(local, productPosts), posts };
+}
+
+/** Publica o produto como Reel (vídeo)? Padrão: sim (IG_FORMAT=photo volta para foto). */
+export function reelsEnabled() {
+  return (process.env.IG_FORMAT || "reels") !== "photo";
 }
 
 /** Publica também um story junto com cada post? Padrão: sim (IG_ALSO_STORY=false desliga). */
@@ -186,6 +193,7 @@ export async function publishItem(id, { baseUrl }) {
 
   let token = null;
   let storyToken = null;
+  let videoToken = null;
   try {
     // Autoridade final: a cota real da própria API do Instagram.
     try {
@@ -201,20 +209,53 @@ export async function publishItem(id, { baseUrl }) {
     updateQueueItem(id, { status: "publishing", error: null });
     const photo = await resolveProductPhoto(item.product, null);
     if (!photo.buffer) throw new Error("Sem foto real do produto — não publico arte sem foto.");
-    const { buffer } = await renderArtJpeg({
-      product: item.product,
-      photoBuffer: photo.buffer,
-      photoContentType: photo.contentType,
-      templateKey: item.template,
-      formatKey: settings.format,
-    });
-    token = putPublicImage(buffer);
-    const imageUrl = `${baseUrl}/api/public-image/${token}.jpg`;
+    let mediaId = null;
+    let permalink = null;
+    let kind = "photo";
+    let reelError = null;
 
-    const { mediaId, permalink } = await instagram.publishPhoto({ imageUrl, caption: item.caption });
+    // 1) Reel (vídeo original gerado do produto). Se falhar ANTES de ir ao ar, cai para foto.
+    if (reelsEnabled()) {
+      let reel = null;
+      const n = listQueue().filter((q) => q.status === "published").length;
+      try {
+        reel = await renderReel({ product: item.product, photoBuffer: photo.buffer, variant: n, hook: HOOKS[n % HOOKS.length] });
+      } catch (e) {
+        reelError = `vídeo não gerado: ${e.message}`;
+        console.warn("[automação] não consegui gerar o Reel, postando como foto:", e.message);
+      }
+      if (reel) {
+        videoToken = putPublicImage(reel.buffer, "video/mp4");
+        try {
+          ({ mediaId, permalink } = await instagram.publishReel({
+            videoUrl: `${baseUrl}/api/public-image/${videoToken}.mp4`,
+            caption: item.caption,
+            coverOffsetMs: reel.coverOffsetMs,
+          }));
+          kind = "reel";
+        } catch (e) {
+          if (!e.beforePublish) throw e; // pode ter ido ao ar: não arrisca duplicar
+          reelError = e.message;
+          console.warn("[automação] Instagram recusou o Reel antes de publicar, postando como foto:", e.message);
+        }
+      }
+    }
+
+    // 2) Foto (padrão, ou plano B do Reel)
+    if (!mediaId) {
+      const { buffer } = await renderArtJpeg({
+        product: item.product,
+        photoBuffer: photo.buffer,
+        photoContentType: photo.contentType,
+        templateKey: item.template,
+        formatKey: settings.format,
+      });
+      token = putPublicImage(buffer);
+      ({ mediaId, permalink } = await instagram.publishPhoto({ imageUrl: `${baseUrl}/api/public-image/${token}.jpg`, caption: item.caption }));
+    }
     rememberPost({ id: mediaId, caption: item.caption });
     let done = updateQueueItem(id, {
-      status: "published", igMediaId: mediaId, permalink, publishedAt: new Date().toISOString(), error: null,
+      status: "published", igMediaId: mediaId, permalink, kind, reelError, publishedAt: new Date().toISOString(), error: null,
     });
 
     // Story do mesmo produto (arte vertical 1080×1920). O post do feed já saiu:
@@ -242,6 +283,7 @@ export async function publishItem(id, { baseUrl }) {
   } finally {
     if (token) deletePublicImage(token);
     if (storyToken) deletePublicImage(storyToken);
+    if (videoToken) deletePublicImage(videoToken);
     busy = false;
   }
 }

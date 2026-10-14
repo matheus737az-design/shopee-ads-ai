@@ -14,10 +14,20 @@ setInterval(() => {
   for (const [t, v] of store) if (v.expiresAt < now) store.delete(t);
 }, 60 * 1000).unref?.();
 
-export function putPublicImage(buffer) {
+export function putPublicImage(buffer, contentType = "image/jpeg") {
   const token = crypto.randomBytes(24).toString("hex");
-  store.set(token, { buffer, expiresAt: Date.now() + TTL_MS });
+  store.set(token, { buffer, contentType, expiresAt: Date.now() + TTL_MS });
   return token;
+}
+
+/** Igual a getPublicImage, mas devolve também o tipo (image/jpeg ou video/mp4). */
+export function getPublicMedia(token) {
+  const v = store.get(token);
+  if (!v || v.expiresAt < Date.now()) {
+    store.delete(token);
+    return null;
+  }
+  return { buffer: v.buffer, contentType: v.contentType || "image/jpeg" };
 }
 
 export function getPublicImage(token) {
