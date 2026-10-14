@@ -146,48 +146,108 @@ export async function buildLayers({ product, photoBuffer, variant = 0, hook }) {
   return layers;
 }
 
-/** ease-out cúbico entre t0 e t1, como expressão do ffmpeg (0→1). */
-const ease = (t0, t1) => `(1-pow(1-min(max((t-${t0})/${t1 - t0},0),1),3))`;
+/* ------------------------------------------------------------------ */
+/* Animação: cada quadro é composto no Node (sharp) e enviado cru ao   */
+/* ffmpeg, que só codifica. Memória previsível (~1 quadro por vez).    */
+/* ------------------------------------------------------------------ */
 
-/** Monta o filtro do ffmpeg que anima as camadas. */
-export function buildFilter({ hasBadge, audio }) {
+const clamp01 = (x) => Math.min(Math.max(x, 0), 1);
+/** ease-out cúbico de 0→1 entre t0 e t1 */
+const E = (t, t0, t1) => 1 - Math.pow(1 - clamp01((t - t0) / (t1 - t0)), 3);
+
+/** Estado de cada camada no instante t (posição pelo centro ou canto, escala, opacidade). */
+export function frameState(t, { hasBadge }) {
   const { W, H, DURATION: D } = REEL;
-  const f = [];
-  // [0] fundo: desliza devagar para cima (efeito de movimento contínuo)
-  f.push(`[0:v]crop=${W}:${H}:0:'200*t/${D}',setsar=1,format=yuva420p[bg]`);
-  // [1] frase de impacto: cai do topo
-  f.push(`[bg][1:v]overlay=x='(W-w)/2':y='-h+(120+h)*${ease(0.1, 0.55)}'[v1]`);
-  // [2] card: entra crescendo com leve exagero, depois zoom lento
-  f.push(`[2:v]scale=w='trunc(iw*if(lt(t,0.3),0.02,if(lt(t,0.75),0.02+1.06*${ease(0.3, 0.75)},1.08-0.08*min((t-0.75)/0.25,1)+0.05*max(t-1,0)/${D}))/2)*2':h=-2:eval=frame[card]`);
-  f.push(`[v1][card]overlay=x='(W-w)/2':y='485-h/2':enable='gte(t,0.3)'[v2]`);
-  // [3] título: sobe e aparece
-  f.push(`[3:v]format=rgba,fade=t=in:st=1.1:d=0.4:alpha=1[title]`);
-  f.push(`[v2][title]overlay=x='(W-w)/2':y='800+30*(1-${ease(1.1, 1.5)})'[v3]`);
-  // [4] preço: entra pela esquerda
-  f.push(`[v3][4:v]overlay=x='-w+((W+w)/2)*${ease(2.0, 2.45)}':y='885':enable='gte(t,2.0)'[v4]`);
-  let last = "v4";
-  let idx = 5;
-  if (hasBadge) {
-    // selo: "pop" com quique
-    f.push(`[${idx}:v]scale=w='trunc(max(4,iw*if(lt(t,2.7),0.02,if(lt(t,2.95),1.25*(t-2.7)/0.25,if(lt(t,3.1),1.25-0.25*(t-2.95)/0.15,1))))/2)*2':h=-2:eval=frame[badge]`);
-    f.push(`[${last}][badge]overlay=x='590-w/2':y='300-h/2':enable='gte(t,2.7)'[v5]`);
-    last = "v5";
-    idx++;
+  const st = { bgOffset: (200 * t) / D, items: [] };
+  st.items.push({ name: "hook", cx: W / 2, top: (h) => -h + (120 + h) * E(t, 0.1, 0.55), scale: 1 });
+  if (t >= 0.3) {
+    let s;
+    if (t < 0.75) s = 0.02 + 1.06 * E(t, 0.3, 0.75);
+    else s = 1.08 - 0.08 * Math.min((t - 0.75) / 0.25, 1) + (0.05 * Math.max(t - 1, 0)) / D;
+    st.items.push({ name: "card", cx: W / 2, cy: 485, scale: s });
   }
-  // CTA: sobe e pulsa
-  f.push(`[${idx}:v]scale=w='trunc(iw*(1+0.05*sin(2*PI*1.6*max(t-4.4,0)))/2)*2':h=-2:eval=frame[cta]`);
-  f.push(`[${last}][cta]overlay=x='(W-w)/2':y='735+${H}*(1-${ease(3.9, 4.4)})-h/2':enable='gte(t,3.9)',format=yuv420p[vout]`);
-  idx++;
-  if (audio) {
-    // Batida 120 bpm: bumbo nos tempos, chimbal nos contratempos, "pop" no selo, fade no fim
-    const kick = `sin(2*PI*(45+90*exp(-28*mod(t,0.5)))*mod(t,0.5))*exp(-7*mod(t,0.5))*0.55`;
-    const hat = `(random(0)-0.5)*exp(-70*mod(t+0.25,0.5))*0.22`;
-    const bass = `sin(2*PI*if(lt(mod(t,2),1),55,65.4)*t)*0.12*(1-exp(-20*mod(t,0.5)))*exp(-2.5*mod(t,0.5))`;
-    const pop = `gte(t,2.7)*sin(2*PI*1046*(t-2.7))*exp(-18*max(t-2.7,0))*0.35`;
-    const swoosh = `gte(t,3.9)*(random(1)-0.5)*exp(-9*max(t-3.9,0))*0.18`;
-    f.push(`aevalsrc='(${kick}+${hat}+${bass}+${pop}+${swoosh})*min(1,(${D}-t)/0.6)':s=44100:d=${D}[aout]`);
+  if (t >= 1.1) st.items.push({ name: "title", cx: W / 2, top: () => 800 + 30 * (1 - E(t, 1.1, 1.5)), scale: 1, alpha: clamp01((t - 1.1) / 0.4) });
+  if (t >= 2.0) st.items.push({ name: "price", left: (w) => -w + ((W + w) / 2) * E(t, 2.0, 2.45), top: () => 885, scale: 1 });
+  if (hasBadge && t >= 2.7) {
+    const s = t < 2.95 ? (1.25 * (t - 2.7)) / 0.25 : t < 3.1 ? 1.25 - (0.25 * (t - 2.95)) / 0.15 : 1;
+    st.items.push({ name: "badge", cx: 590, cy: 300, scale: Math.max(s, 0.03) });
   }
-  return f.join(";");
+  if (t >= 3.9) {
+    st.items.push({ name: "cta", cx: W / 2, cy: 735 + H * (1 - E(t, 3.9, 4.4)), scale: 1 + 0.05 * Math.sin(2 * Math.PI * 1.6 * Math.max(t - 4.4, 0)) });
+  }
+  return st;
+}
+
+/** Converte as camadas PNG para RGBA cru (uma vez). */
+async function toRaw(layers) {
+  const out = {};
+  for (const [k, png] of Object.entries(layers)) {
+    const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    out[k] = { data, w: info.width, h: info.height };
+  }
+  return out;
+}
+
+const rawImg = (l) => ({ raw: { width: l.w, height: l.h, channels: 4 } });
+
+/** Recorta a parte visível de uma camada colocada em (x,y) num quadro W×H. */
+async function placeVisible(layer, x, y) {
+  const { W, H } = REEL;
+  const x0 = Math.max(0, Math.round(x)), y0 = Math.max(0, Math.round(y));
+  const x1 = Math.min(W, Math.round(x) + layer.w), y1 = Math.min(H, Math.round(y) + layer.h);
+  if (x1 - x0 < 1 || y1 - y0 < 1) return null;
+  if (x0 === Math.round(x) && y0 === Math.round(y) && x1 - x0 === layer.w && y1 - y0 === layer.h) {
+    return { input: layer.data, ...rawImg(layer), left: x0, top: y0 };
+  }
+  const data = await sharp(layer.data, rawImg(layer))
+    .extract({ left: x0 - Math.round(x), top: y0 - Math.round(y), width: x1 - x0, height: y1 - y0 })
+    .raw()
+    .toBuffer();
+  return { input: data, raw: { width: x1 - x0, height: y1 - y0, channels: 4 }, left: x0, top: y0 };
+}
+
+async function scaled(layer, scale) {
+  if (Math.abs(scale - 1) < 0.002) return layer;
+  const w = Math.max(2, Math.round(layer.w * scale));
+  const { data, info } = await sharp(layer.data, rawImg(layer)).resize({ width: w }).raw().toBuffer({ resolveWithObject: true });
+  return { data, w: info.width, h: info.height };
+}
+
+async function faded(layer, alpha) {
+  if (alpha >= 0.999) return layer;
+  const data = Buffer.from(layer.data);
+  for (let i = 3; i < data.length; i += 4) data[i] = Math.round(data[i] * alpha);
+  return { ...layer, data };
+}
+
+/** Compõe o quadro do instante t e devolve RGB cru (W×H×3). */
+export async function composeFrame(raw, t) {
+  const { W, H } = REEL;
+  const st = frameState(t, { hasBadge: Boolean(raw.badge) });
+  const bg = await sharp(raw.bg.data, rawImg(raw.bg)).extract({ left: 0, top: Math.round(st.bgOffset), width: W, height: H }).raw().toBuffer();
+  const comps = [];
+  for (const it of st.items) {
+    let l = raw[it.name];
+    if (!l) continue;
+    l = await scaled(l, it.scale);
+    if (it.alpha != null) l = await faded(l, it.alpha);
+    const x = it.left ? it.left(l.w) : it.cx - l.w / 2;
+    const y = it.top ? it.top(l.h) : it.cy - l.h / 2;
+    const c = await placeVisible(l, x, y);
+    if (c) comps.push(c);
+  }
+  return sharp(bg, { raw: { width: W, height: H, channels: 4 } }).composite(comps).removeAlpha().raw().toBuffer();
+}
+
+/** Trilha: batida 120 bpm, "pop" no selo e "swoosh" no CTA (ffmpeg aevalsrc). */
+export function audioExpr() {
+  const D = REEL.DURATION;
+  const kick = `sin(2*PI*(45+90*exp(-28*mod(t,0.5)))*mod(t,0.5))*exp(-7*mod(t,0.5))*0.55`;
+  const hat = `(random(0)-0.5)*exp(-70*mod(t+0.25,0.5))*0.22`;
+  const bass = `sin(2*PI*if(lt(mod(t,2),1),55,65.4)*t)*0.12*(1-exp(-20*mod(t,0.5)))*exp(-2.5*mod(t,0.5))`;
+  const pop = `gte(t,2.7)*sin(2*PI*1046*(t-2.7))*exp(-18*max(t-2.7,0))*0.35`;
+  const swoosh = `gte(t,3.9)*(random(1)-0.5)*exp(-9*max(t-3.9,0))*0.18`;
+  return `aevalsrc='(${kick}+${hat}+${bass}+${pop}+${swoosh})*min(1,(${D}-t)/0.6)':s=44100:d=${D}`;
 }
 
 async function ffmpegPath() {
@@ -212,82 +272,76 @@ function rssMb(pid) {
 }
 
 /**
- * Roda o ffmpeg com duas travas: tempo máximo e memória máxima
- * (REELS_MAX_MB, padrão 260). Passou do limite, mata o ffmpeg — o post sai
- * como foto — em vez de deixar o Render derrubar o servidor inteiro por falta
- * de memória.
+ * Gera o Reel. Trava de tempo e de memória (REELS_MAX_MB, padrão 200 MB para
+ * o ffmpeg): se passar, aborta — e o post sai como foto — em vez de deixar o
+ * Render derrubar o servidor.
+ * @returns {Promise<{buffer:Buffer, durationSec:number, coverOffsetMs:number}>}
  */
-function run(bin, args, timeoutMs) {
-  const maxMb = Number(process.env.REELS_MAX_MB) || 260;
-  return new Promise((resolve, reject) => {
-    const p = spawn(bin, args, { stdio: ["ignore", "ignore", "pipe"] });
-    let err = "";
-    let killedFor = null;
-    p.stderr.on("data", (d) => (err = (err + d).slice(-4000)));
-    const timer = setTimeout(() => {
-      killedFor = "ffmpeg demorou demais para gerar o vídeo.";
-      p.kill("SIGKILL");
-    }, timeoutMs);
-    const watch = setInterval(() => {
-      const mb = rssMb(p.pid);
-      if (mb != null && mb > maxMb) {
-        killedFor = `ffmpeg passou do limite de memória (${Math.round(mb)} MB > ${maxMb} MB).`;
-        p.kill("SIGKILL");
-      }
-    }, 150);
-    const done = () => {
-      clearTimeout(timer);
-      clearInterval(watch);
-    };
-    p.on("error", (e) => {
-      done();
-      reject(new Error(`ffmpeg indisponível: ${e.message}`));
-    });
-    p.on("close", (code) => {
-      done();
-      if (killedFor) return reject(new Error(killedFor));
-      code === 0 ? resolve() : reject(new Error(`ffmpeg falhou (${code}): ${err.split("\n").slice(-4).join(" ")}`));
-    });
-  });
-}
-
-/**
- * Gera o Reel. @returns {Promise<{buffer:Buffer, durationSec:number, coverOffsetMs:number}>}
- */
-export async function renderReel({ product, photoBuffer, variant = 0, hook, timeoutMs = 6 * 60 * 1000 }) {
+export async function renderReel({ product, photoBuffer, variant = 0, hook, timeoutMs = 8 * 60 * 1000 }) {
   const { W, H, FPS, DURATION: D } = REEL;
-  const layers = await buildLayers({ product, photoBuffer, variant, hook });
+  sharp.cache(false);
+  sharp.concurrency(1);
+  const raw = await toRaw(await buildLayers({ product, photoBuffer, variant, hook }));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reel-"));
+  const out = path.join(dir, "reel.mp4");
+  const audio = process.env.REELS_AUDIO !== "off";
+  const maxMb = Number(process.env.REELS_MAX_MB) || 200;
+  const args = [
+    "-hide_banner", "-loglevel", "error", "-y", "-threads", "1", "-filter_threads", "1",
+    "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", `${W}x${H}`, "-r", String(FPS), "-i", "pipe:0",
+    ...(audio ? ["-f", "lavfi", "-i", audioExpr()] : []),
+    "-map", "0:v", ...(audio ? ["-map", "1:a", "-c:a", "aac", "-b:a", "128k", "-ar", "44100"] : []),
+    "-c:v", "libx264", "-preset", process.env.REELS_PRESET || "veryfast", "-crf", "22",
+    "-x264-params", "threads=1:lookahead-threads=1:sliced-threads=0:rc-lookahead=0:ref=2:bframes=0",
+    "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.0",
+    "-t", String(D), "-movflags", "+faststart",
+    out,
+  ];
+  const bin = await ffmpegPath();
+  const p = spawn(bin, args, { stdio: ["pipe", "ignore", "pipe"], env: { ...process.env, MALLOC_ARENA_MAX: "2" } });
+  let err = "";
+  let abort = null;
+  p.stderr.on("data", (d) => (err = (err + d).slice(-4000)));
+  p.stdin.on("error", () => {}); // ffmpeg morto -> escrita falha; tratado abaixo
+  const exited = new Promise((resolve) => p.on("close", resolve));
+  const spawnError = new Promise((_, reject) => p.on("error", (e) => reject(new Error(`ffmpeg indisponível: ${e.message}`))));
+  const kill = (why) => {
+    if (!abort) abort = why;
+    p.kill("SIGKILL");
+  };
+  const timer = setTimeout(() => kill("a geração do vídeo demorou demais."), timeoutMs);
+  const watch = setInterval(() => {
+    const mb = rssMb(p.pid);
+    if (mb != null && mb > maxMb) kill(`ffmpeg passou do limite de memória (${Math.round(mb)} MB > ${maxMb} MB).`);
+  }, 150);
   try {
-    const order = ["bg", "hook", "card", "title", "price", ...(layers.badge ? ["badge"] : []), "cta"];
-    const inputs = [];
-    for (const name of order) {
-      const file = path.join(dir, `${name}.png`);
-      fs.writeFileSync(file, layers[name]);
-      // -threads 1 por entrada: no Render o ffmpeg enxerga todos os núcleos da máquina
-      // hospedeira e abriria dezenas de threads (com buffers) por imagem.
-      inputs.push("-threads", "1", "-thread_queue_size", "4", "-loop", "1", "-framerate", String(FPS), "-t", String(D), "-i", file);
-    }
-    const audio = process.env.REELS_AUDIO !== "off";
-    const out = path.join(dir, "reel.mp4");
-    const args = [
-      "-hide_banner", "-loglevel", "error", "-y", "-filter_threads", "1",
-      ...inputs,
-      "-filter_complex_threads", "1",
-      "-filter_complex", buildFilter({ hasBadge: Boolean(layers.badge), audio }),
-      "-map", "[vout]",
-      ...(audio ? ["-map", "[aout]", "-c:a", "aac", "-b:a", "128k", "-ar", "44100"] : []),
-      "-c:v", "libx264", "-preset", process.env.REELS_PRESET || "veryfast", "-crf", "22",
-      // memória baixa (Render grátis = 512 MB): sem lookahead/threads extras
-      "-x264-params", "rc-lookahead=0:threads=1:sliced-threads=0:ref=2:bframes=0",
-      "-pix_fmt", "yuv420p", "-r", String(FPS), "-s", `${W}x${H}`,
-      "-profile:v", "high", "-level", "4.0",
-      "-t", String(D), "-movflags", "+faststart", "-threads", process.env.REELS_THREADS || "1",
-      out,
-    ];
-    await run(await ffmpegPath(), args, timeoutMs);
+    const frames = Math.round(D * FPS);
+    const writeAll = (async () => {
+      for (let i = 0; i < frames && !abort; i++) {
+        const frame = await composeFrame(raw, i / FPS);
+        if (!p.stdin.write(frame)) {
+          await new Promise((r) => {
+            const done = () => {
+              p.stdin.off("drain", done);
+              p.stdin.off("close", done);
+              r();
+            };
+            p.stdin.on("drain", done);
+            p.stdin.on("close", done);
+          });
+        }
+      }
+      p.stdin.end();
+    })();
+    await Promise.race([writeAll, spawnError]);
+    const code = await Promise.race([exited, spawnError]);
+    if (abort) throw new Error(abort);
+    if (code !== 0) throw new Error(`ffmpeg falhou (${code}): ${err.split("\n").slice(-4).join(" ")}`);
     return { buffer: fs.readFileSync(out), durationSec: D, coverOffsetMs: 4600 };
   } finally {
+    clearTimeout(timer);
+    clearInterval(watch);
+    if (p.exitCode == null) p.kill("SIGKILL");
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
