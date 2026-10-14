@@ -201,21 +201,51 @@ async function ffmpegPath() {
   return "ffmpeg";
 }
 
+/** Memória (RSS) do processo em MB, lida do /proc (Linux). null se indisponível. */
+function rssMb(pid) {
+  try {
+    const m = fs.readFileSync(`/proc/${pid}/status`, "utf8").match(/VmRSS:\s+(\d+)\s+kB/);
+    return m ? Number(m[1]) / 1024 : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Roda o ffmpeg com duas travas: tempo máximo e memória máxima
+ * (REELS_MAX_MB, padrão 260). Passou do limite, mata o ffmpeg — o post sai
+ * como foto — em vez de deixar o Render derrubar o servidor inteiro por falta
+ * de memória.
+ */
 function run(bin, args, timeoutMs) {
+  const maxMb = Number(process.env.REELS_MAX_MB) || 260;
   return new Promise((resolve, reject) => {
     const p = spawn(bin, args, { stdio: ["ignore", "ignore", "pipe"] });
     let err = "";
+    let killedFor = null;
     p.stderr.on("data", (d) => (err = (err + d).slice(-4000)));
     const timer = setTimeout(() => {
+      killedFor = "ffmpeg demorou demais para gerar o vídeo.";
       p.kill("SIGKILL");
-      reject(new Error("ffmpeg demorou demais para gerar o vídeo."));
     }, timeoutMs);
-    p.on("error", (e) => {
+    const watch = setInterval(() => {
+      const mb = rssMb(p.pid);
+      if (mb != null && mb > maxMb) {
+        killedFor = `ffmpeg passou do limite de memória (${Math.round(mb)} MB > ${maxMb} MB).`;
+        p.kill("SIGKILL");
+      }
+    }, 150);
+    const done = () => {
       clearTimeout(timer);
+      clearInterval(watch);
+    };
+    p.on("error", (e) => {
+      done();
       reject(new Error(`ffmpeg indisponível: ${e.message}`));
     });
     p.on("close", (code) => {
-      clearTimeout(timer);
+      done();
+      if (killedFor) return reject(new Error(killedFor));
       code === 0 ? resolve() : reject(new Error(`ffmpeg falhou (${code}): ${err.split("\n").slice(-4).join(" ")}`));
     });
   });
@@ -234,17 +264,22 @@ export async function renderReel({ product, photoBuffer, variant = 0, hook, time
     for (const name of order) {
       const file = path.join(dir, `${name}.png`);
       fs.writeFileSync(file, layers[name]);
-      inputs.push("-loop", "1", "-framerate", String(FPS), "-t", String(D), "-i", file);
+      // -threads 1 por entrada: no Render o ffmpeg enxerga todos os núcleos da máquina
+      // hospedeira e abriria dezenas de threads (com buffers) por imagem.
+      inputs.push("-threads", "1", "-thread_queue_size", "4", "-loop", "1", "-framerate", String(FPS), "-t", String(D), "-i", file);
     }
     const audio = process.env.REELS_AUDIO !== "off";
     const out = path.join(dir, "reel.mp4");
     const args = [
-      "-hide_banner", "-loglevel", "error", "-y",
+      "-hide_banner", "-loglevel", "error", "-y", "-filter_threads", "1",
       ...inputs,
+      "-filter_complex_threads", "1",
       "-filter_complex", buildFilter({ hasBadge: Boolean(layers.badge), audio }),
       "-map", "[vout]",
       ...(audio ? ["-map", "[aout]", "-c:a", "aac", "-b:a", "128k", "-ar", "44100"] : []),
       "-c:v", "libx264", "-preset", process.env.REELS_PRESET || "veryfast", "-crf", "22",
+      // memória baixa (Render grátis = 512 MB): sem lookahead/threads extras
+      "-x264-params", "rc-lookahead=0:threads=1:sliced-threads=0:ref=2:bframes=0",
       "-pix_fmt", "yuv420p", "-r", String(FPS), "-s", `${W}x${H}`,
       "-profile:v", "high", "-level", "4.0",
       "-t", String(D), "-movflags", "+faststart", "-threads", process.env.REELS_THREADS || "1",
