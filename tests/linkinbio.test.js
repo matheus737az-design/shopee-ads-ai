@@ -22,7 +22,7 @@ test("vitrine só mostra posts de produto, com link e imagem", () => {
     { id: "3", caption: "Cód. 123 sem link", mediaType: "IMAGE", mediaUrl: "https://cdn/z.jpg", timestamp: 3 },
   ]);
   assert.deepEqual(items.map((i) => i.id), ["1", "4"]);
-  assert.equal(items[1].image, "/achados/img/4"); // capa servida pelo nosso servidor
+  assert.equal(items[1].image, "/achados/img/4?v=2"); // capa servida pelo nosso servidor
 });
 
 test("página escapa HTML e marca links como patrocinados", () => {

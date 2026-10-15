@@ -47,7 +47,7 @@ export function productsFromPosts(posts) {
       title: extractTitle(p.caption),
       // A CDN do Instagram bloqueia imagens em outros sites (e as URLs expiram):
       // a capa é servida pelo nosso servidor em /achados/img/:id
-      image: (p.mediaType === "VIDEO" ? p.thumbnailUrl : p.mediaUrl) ? `/achados/img/${encodeURIComponent(p.id)}` : null,
+      image: (p.mediaType === "VIDEO" ? p.thumbnailUrl : p.mediaUrl) ? `/achados/img/${encodeURIComponent(p.id)}?v=2` : null,
       code: (p.caption || "").match(/C[óo]d\.\s*(\w+)/i)?.[1] || null,
       permalink: p.permalink,
       timestamp: p.timestamp,
