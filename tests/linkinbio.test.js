@@ -17,10 +17,12 @@ test("título pula a chamada inicial", () => {
 test("vitrine só mostra posts de produto, com link e imagem", () => {
   const items = productsFromPosts([
     { id: "1", caption: cap, mediaType: "IMAGE", mediaUrl: "https://cdn/x.jpg", timestamp: 1 },
+    { id: "4", caption: cap.replace("58201637252", "777777"), mediaType: "VIDEO", mediaUrl: "https://cdn/v.mp4", thumbnailUrl: "https://cdn/t.jpg", timestamp: 4 },
     { id: "2", caption: "Bem-vindo ao perfil!", mediaType: "IMAGE", mediaUrl: "https://cdn/y.jpg", timestamp: 2 },
     { id: "3", caption: "Cód. 123 sem link", mediaType: "IMAGE", mediaUrl: "https://cdn/z.jpg", timestamp: 3 },
   ]);
-  assert.deepEqual(items.map((i) => i.id), ["1"]);
+  assert.deepEqual(items.map((i) => i.id), ["1", "4"]);
+  assert.equal(items[1].image, "/achados/img/4"); // capa servida pelo nosso servidor
 });
 
 test("página escapa HTML e marca links como patrocinados", () => {

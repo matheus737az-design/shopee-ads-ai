@@ -1,4 +1,5 @@
 import { Router } from "express";
+import sharp from "sharp";
 import * as instagram from "../services/instagramService.js";
 import { getRecentPosts, productCode } from "../services/igHistory.js";
 import { getTrendingProducts } from "../services/trendingService.js";
@@ -42,8 +43,9 @@ export function productsFromPosts(posts) {
       id: p.id,
       link: extractLink(p.caption),
       title: extractTitle(p.caption),
-      // Reels aparecem pela capa (thumbnail); fotos pela própria imagem
-      image: p.mediaType === "VIDEO" ? p.thumbnailUrl : p.mediaUrl,
+      // A CDN do Instagram bloqueia imagens em outros sites (e as URLs expiram):
+      // a capa é servida pelo nosso servidor em /achados/img/:id
+      image: (p.mediaType === "VIDEO" ? p.thumbnailUrl : p.mediaUrl) ? `/achados/img/${encodeURIComponent(p.id)}` : null,
       code: (p.caption || "").match(/C[óo]d\.\s*(\w+)/i)?.[1] || null,
       permalink: p.permalink,
       timestamp: p.timestamp,
@@ -172,6 +174,38 @@ export function page({ items, more = [], brand = BRAND(), error = null }) {
 }
 
 const router = Router();
+
+// Capas dos posts: baixadas da CDN do Instagram pelo servidor, reduzidas e
+// guardadas em memória (até 80 imagens, 6h). Só busca URLs que vieram da
+// própria API (pelo id do post), nunca uma URL qualquer.
+const IMG_TTL_MS = 6 * 3600 * 1000;
+const imgCache = new Map(); // id -> { buf, at }
+const IG_CDN = /(^|\.)(cdninstagram\.com|fbcdn\.net)$/i;
+
+router.get("/img/:id", async (req, res) => {
+  const id = String(req.params.id).replace(/[^0-9_]/g, "");
+  const hit = imgCache.get(id);
+  if (hit && Date.now() - hit.at < IMG_TTL_MS) {
+    return res.set("Content-Type", "image/jpeg").set("Cache-Control", "public, max-age=21600").send(hit.buf);
+  }
+  try {
+    if (!instagram.isConfigured()) return res.status(404).end();
+    const post = (await getRecentPosts()).find((p) => p.id === id);
+    const url = post && (post.mediaType === "VIDEO" ? post.thumbnailUrl : post.mediaUrl);
+    if (!url || !IG_CDN.test(new URL(url).hostname)) return res.status(404).end();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    const r = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+    if (!r.ok) return res.status(502).end();
+    const buf = await sharp(Buffer.from(await r.arrayBuffer())).resize({ width: 540, withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+    imgCache.set(id, { buf, at: Date.now() });
+    while (imgCache.size > 80) imgCache.delete(imgCache.keys().next().value);
+    res.set("Content-Type", "image/jpeg").set("Cache-Control", "public, max-age=21600").send(buf);
+  } catch (e) {
+    console.warn("[achados] capa falhou:", e.message);
+    res.status(502).end();
+  }
+});
 
 router.get("/", async (req, res) => {
   const brand = BRAND();
