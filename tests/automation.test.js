@@ -225,6 +225,7 @@ test("Reels: gera o vídeo e publica como REELS (MP4 público) + story", { timeo
   assert.match(creates[0].body, /media_type=REELS/);
   assert.match(creates[0].body, /video_url=https%3A%2F%2Fapp\.test%2Fapi%2Fpublic-image%2F[a-f0-9]{48}\.mp4/);
   assert.match(creates[0].body, /share_to_feed=true/);
+  assert.match(creates[0].body, /cover_url=https%3A%2F%2Fapp\.test%2Fapi%2Fpublic-image%2F[a-f0-9]{48}\.jpg/); // capa própria
   assert.match(creates[1].body, /media_type=STORIES/);
   assert.equal(getQueueItem(it.id).kind, "reel");
 });

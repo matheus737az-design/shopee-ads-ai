@@ -150,13 +150,15 @@ async function waitUntilReady(containerId, { tries = 20, everyMs = 2000, what = 
  * postar como foto no lugar).
  * @returns {{mediaId:string, permalink:string|null}}
  */
-export async function publishReel({ videoUrl, caption, coverOffsetMs }) {
+export async function publishReel({ videoUrl, caption, coverOffsetMs, coverUrl }) {
   if (!isConfigured()) throw new Error("Instagram não configurado (faltam IG_USER_ID / IG_ACCESS_TOKEN).");
   const id = process.env.IG_USER_ID;
   let container;
   try {
     const params = { media_type: "REELS", video_url: videoUrl, caption, share_to_feed: "true" };
-    if (coverOffsetMs != null) params.thumb_offset = String(coverOffsetMs);
+    // cover_url = capa própria (o thumb_offset sozinho foi ignorado: a capa saía no 1º quadro, vazio)
+    if (coverUrl) params.cover_url = coverUrl;
+    else if (coverOffsetMs != null) params.thumb_offset = String(coverOffsetMs);
     container = await graph(`/${id}/media`, { method: "POST", params });
     await waitUntilReady(container.id, { tries: 60, everyMs: 5000, what: "o vídeo" });
   } catch (e) {

@@ -194,6 +194,7 @@ export async function publishItem(id, { baseUrl }) {
   let token = null;
   let storyToken = null;
   let videoToken = null;
+  let coverToken = null;
   try {
     // Autoridade final: a cota real da própria API do Instagram.
     try {
@@ -231,6 +232,7 @@ export async function publishItem(id, { baseUrl }) {
             videoUrl: `${baseUrl}/api/public-image/${videoToken}.mp4`,
             caption: item.caption,
             coverOffsetMs: reel.coverOffsetMs,
+            coverUrl: reel.cover ? `${baseUrl}/api/public-image/${(coverToken = putPublicImage(reel.cover))}.jpg` : undefined,
           }));
           kind = "reel";
         } catch (e) {
@@ -284,6 +286,7 @@ export async function publishItem(id, { baseUrl }) {
     if (token) deletePublicImage(token);
     if (storyToken) deletePublicImage(storyToken);
     if (videoToken) deletePublicImage(videoToken);
+    if (coverToken) deletePublicImage(coverToken);
     busy = false;
   }
 }

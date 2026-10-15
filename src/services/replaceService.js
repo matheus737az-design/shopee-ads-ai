@@ -49,16 +49,19 @@ export async function replaceWithReel({ baseUrl, code }) {
 
   const reel = await renderReel({ product, photoBuffer: photo.buffer, variant: 0, hook: HOOKS[0] });
   const token = putPublicImage(reel.buffer, "video/mp4");
+  let coverToken = null;
   try {
     const { mediaId, permalink } = await instagram.publishReel({
       videoUrl: `${baseUrl}/api/public-image/${token}.mp4`,
       caption: original.caption,
       coverOffsetMs: reel.coverOffsetMs,
+      coverUrl: reel.cover ? `${baseUrl}/api/public-image/${(coverToken = putPublicImage(reel.cover))}.jpg` : undefined,
     });
     rememberPost({ id: mediaId, caption: original.caption });
     return { status: "publicado", mediaId, permalink, oldPost: original.permalink || original.id };
   } finally {
     deletePublicImage(token);
+    if (coverToken) deletePublicImage(coverToken);
   }
 }
 

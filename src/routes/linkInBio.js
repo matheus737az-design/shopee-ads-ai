@@ -1,5 +1,7 @@
 import { Router } from "express";
 import sharp from "sharp";
+import { resolveProductPhoto } from "../services/imageService.js";
+import { renderArtJpeg } from "../services/artRenderService.js";
 import * as instagram from "../services/instagramService.js";
 import { getRecentPosts, productCode } from "../services/igHistory.js";
 import { getTrendingProducts } from "../services/trendingService.js";
@@ -182,6 +184,23 @@ const IMG_TTL_MS = 6 * 3600 * 1000;
 const imgCache = new Map(); // id -> { buf, at }
 const IG_CDN = /(^|\.)(cdninstagram\.com|fbcdn\.net)$/i;
 
+/** Arte 4:5 do produto (como os posts de foto), achado pelo "Cód." da legenda. */
+async function productCover(caption) {
+  const code = (caption || "").match(/C[óo]d\.\s*(\d+)/i)?.[1];
+  if (!code || !hasCredentials()) return null;
+  let product = (await cachedTrending()).find((p) => String(p.id).endsWith(`_${code}`));
+  for (let page = 3; !product && page <= 6; page++) {
+    const items = await getTrendingProducts({ limit: 50, page }).catch(() => []);
+    product = items.find((p) => String(p.id).endsWith(`_${code}`));
+    if (!items.length) break;
+  }
+  if (!product) return null;
+  const photo = await resolveProductPhoto(product, null);
+  if (!photo.buffer) return null;
+  const { buffer } = await renderArtJpeg({ product, photoBuffer: photo.buffer, photoContentType: photo.contentType, templateKey: "OFERTA", formatKey: "feed" });
+  return sharp(buffer).resize({ width: 540 }).jpeg({ quality: 82 }).toBuffer();
+}
+
 router.get("/img/:id", async (req, res) => {
   const id = String(req.params.id).replace(/[^0-9_]/g, "");
   const hit = imgCache.get(id);
@@ -191,7 +210,21 @@ router.get("/img/:id", async (req, res) => {
   try {
     if (!instagram.isConfigured()) return res.status(404).end();
     const post = (await getRecentPosts()).find((p) => p.id === id);
-    const url = post && (post.mediaType === "VIDEO" ? post.thumbnailUrl : post.mediaUrl);
+    if (!post) return res.status(404).end();
+    // Reel: a capa do Instagram pode ser o 1º quadro (vazio). Monta a capa a
+    // partir do produto (mesma arte dos posts de foto); se não achar, usa a do Instagram.
+    if (post.mediaType === "VIDEO") {
+      const cover = await productCover(post.caption).catch((e) => {
+        console.warn("[achados] capa do produto falhou:", e.message);
+        return null;
+      });
+      if (cover) {
+        imgCache.set(id, { buf: cover, at: Date.now() });
+        while (imgCache.size > 80) imgCache.delete(imgCache.keys().next().value);
+        return res.set("Content-Type", "image/jpeg").set("Cache-Control", "public, max-age=21600").send(cover);
+      }
+    }
+    const url = post.mediaType === "VIDEO" ? post.thumbnailUrl : post.mediaUrl;
     if (!url || !IG_CDN.test(new URL(url).hostname)) return res.status(404).end();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15000);

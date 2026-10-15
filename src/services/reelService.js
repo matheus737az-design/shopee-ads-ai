@@ -275,7 +275,7 @@ function rssMb(pid) {
  * Gera o Reel. Trava de tempo e de memória (REELS_MAX_MB, padrão 200 MB para
  * o ffmpeg): se passar, aborta — e o post sai como foto — em vez de deixar o
  * Render derrubar o servidor.
- * @returns {Promise<{buffer:Buffer, durationSec:number, coverOffsetMs:number}>}
+ * @returns {Promise<{buffer:Buffer, cover:Buffer, durationSec:number, coverOffsetMs:number}>}
  */
 export async function renderReel({ product, photoBuffer, variant = 0, hook, timeoutMs = 8 * 60 * 1000 }) {
   const { W, H, FPS, DURATION: D } = REEL;
@@ -337,7 +337,9 @@ export async function renderReel({ product, photoBuffer, variant = 0, hook, time
     const code = await Promise.race([exited, spawnError]);
     if (abort) throw new Error(abort);
     if (code !== 0) throw new Error(`ffmpeg falhou (${code}): ${err.split("\n").slice(-4).join(" ")}`);
-    return { buffer: fs.readFileSync(out), durationSec: D, coverOffsetMs: 4600 };
+    // Capa do Reel: quadro com tudo na tela (produto, preço, selo, CTA)
+    const cover = await sharp(await composeFrame(raw, 5.5), { raw: { width: W, height: H, channels: 3 } }).jpeg({ quality: 88 }).toBuffer();
+    return { buffer: fs.readFileSync(out), cover, durationSec: D, coverOffsetMs: 5500 };
   } finally {
     clearTimeout(timer);
     clearInterval(watch);
