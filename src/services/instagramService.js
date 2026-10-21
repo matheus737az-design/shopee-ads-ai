@@ -46,6 +46,7 @@ async function graph(path, { method = "GET", params = {} } = {}) {
       const e = json?.error || {};
       const err = new Error(explain(e, res.status));
       err.code = e.code;
+      err.subcode = e.error_subcode;
       throw err;
     }
     return json;
@@ -144,6 +145,22 @@ async function waitUntilReady(containerId, { tries = 20, everyMs = 2000, what = 
 }
 
 /**
+ * media_publish logo após o FINISHED às vezes volta 9007 ("Media ID is not
+ * available"): a mídia ainda não foi liberada para publicação. Nesse erro
+ * nada foi ao ar, então é seguro repetir após uma pausa.
+ */
+async function publishContainer(id, creationId, { tries = 5, everyMs = 4000 } = {}) {
+  for (let i = 1; ; i++) {
+    try {
+      return await graph(`/${id}/media_publish`, { method: "POST", params: { creation_id: creationId } });
+    } catch (e) {
+      if (e.code !== 9007 || i >= tries) throw e;
+      await new Promise((r) => setTimeout(r, everyMs * i));
+    }
+  }
+}
+
+/**
  * Publica um Reel (vídeo MP4 em URL pública). Vídeo leva mais tempo para a
  * Meta processar, então espera até ~5 min. Erros ANTES do media_publish
  * vêm marcados com beforePublish=true (nada foi ao ar — é seguro tentar
@@ -165,7 +182,7 @@ export async function publishReel({ videoUrl, caption, coverOffsetMs, coverUrl }
     e.beforePublish = true;
     throw e;
   }
-  const published = await graph(`/${id}/media_publish`, { method: "POST", params: { creation_id: container.id } });
+  const published = await publishContainer(id, container.id);
   if (!published?.id) throw new Error("O Instagram não confirmou a publicação do Reel.");
   let permalink = null;
   try {
@@ -197,7 +214,7 @@ async function publishMedia({ imageUrl, params, withPermalink = true }) {
   const id = process.env.IG_USER_ID;
   const container = await graph(`/${id}/media`, { method: "POST", params: { image_url: imageUrl, ...params } });
   await waitUntilReady(container.id);
-  const published = await graph(`/${id}/media_publish`, { method: "POST", params: { creation_id: container.id } });
+  const published = await publishContainer(id, container.id);
   if (!published?.id) throw new Error("O Instagram não confirmou a publicação.");
 
   let permalink = null;

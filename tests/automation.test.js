@@ -27,7 +27,7 @@ const { getQueueItem, listQueue } = await import("../src/db/queueRepository.js")
 const product = { id: "p1", title: "Fone Bluetooth", price: 49.9, images: [], url: "https://shopee.com.br/x" };
 const mk = (status = "approved") => enqueue({ product: { ...product, id: "p" + Math.random() }, caption: "legenda", affiliateLink: "https://s.shopee.com.br/abc", template: "OFERTA", status });
 
-let calls, quota, failPublish, igPosts, mediaSeq = 0, failStory = false, reelContainerFails = false, failReelPublish = false;
+let calls, quota, failPublish, igPosts, mediaSeq = 0, failStory = false, reelContainerFails = false, failReelPublish = false, storyNotReady = 0;
 function installFetch() {
   calls = [];
   globalThis.fetch = async (url, opts = {}) => {
@@ -47,6 +47,10 @@ function installFetch() {
       if (failPublish) return json({ error: { code: 190, message: "expired" } }, 400);
       const id = `media${++mediaSeq}`;
       if (failStory && String(opts.body).includes("cont1s")) return json({ error: { message: "story falhou" } }, 400);
+      if (storyNotReady > 0 && String(opts.body).includes("cont1s")) {
+        storyNotReady--;
+        return json({ error: { code: 9007, error_subcode: 2207027, message: "Media ID is not available" } }, 400);
+      }
       if (failReelPublish && String(opts.body).includes("cont1r")) return json({ error: { message: "timeout no publish" } }, 500);
       if (!String(opts.body).includes("cont1s")) igPosts.unshift({ id, timestamp: Date.now(), caption: "" }); // stories não aparecem em /media
       return json({ id });
@@ -56,7 +60,7 @@ function installFetch() {
   };
 }
 const { clearHistoryCache } = await import("../src/services/igHistory.js");
-test.beforeEach(() => { quota = { used: 0, total: 100 }; failPublish = false; failStory = false; reelContainerFails = false; failReelPublish = false; hasPhoto = true; igPosts = []; clearHistoryCache(); installFetch(); });
+test.beforeEach(() => { quota = { used: 0, total: 100 }; failPublish = false; failStory = false; reelContainerFails = false; failReelPublish = false; storyNotReady = 0; hasPhoto = true; igPosts = []; clearHistoryCache(); installFetch(); });
 
 test("publica: container -> media_publish -> published, imagem é JPEG pública", async () => {
   const it = mk();
@@ -193,6 +197,18 @@ test("se o story falhar, o post continua publicado e não é repetido", async ()
   assert.equal(saved.status, "published");
   assert.match(saved.storyError, /story falhou/);
   assert.equal(calls.filter((c) => c.url.endsWith("/123/media_publish")).length, 2); // 1 feed + 1 tentativa de story
+});
+
+test("story: 'Media ID is not available' (9007) é repetido até publicar", { timeout: 60000 }, async () => {
+  fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
+  storyNotReady = 1;
+  const it = mk();
+  const r = await publishItem(it.id, { baseUrl: "https://app.test" });
+  assert.equal(r.published, true);
+  const saved = getQueueItem(it.id);
+  assert.ok(saved.igStoryId);
+  assert.equal(saved.storyError, null);
+  assert.equal(calls.filter((c) => c.url.endsWith("/123/media_publish")).length, 3); // 1 feed + 2 tentativas de story
 });
 
 test("IG_ALSO_STORY=false publica só o feed", async () => {
